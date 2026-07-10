@@ -128,12 +128,31 @@ def _unicode_scripts(tex: str) -> str:
     return tex
 
 
+def _looks_like_prose(content: str) -> bool:
+    """Guard against $...$ span detection (both this package's own
+    convert_math_spans and, confirmed directly via treesitter, tree-sitter-
+    markdown's own inline-math grammar) pairing the first '$' with
+    whichever '$' comes next, regardless of what's between them -- e.g.
+    "costs $50 ... $100" gets read as one math span "50 ... $100"->"50 ...".
+    Real LaTeX almost always has a macro (backslash) or a sub/superscript
+    marker; multi-word prose with neither is almost certainly a false
+    positive, not an equation."""
+    if "\\" in content or "_" in content or "^" in content:
+        return False
+    return len(re.findall(r"[A-Za-z]{2,}", content)) >= 3
+
+
 def latex_to_unicode(tex: str) -> str:
     """Convert one bare LaTeX math expression (no $ delimiters) to a
     readable Unicode approximation. Falls back to the original text on any
     parse failure rather than raising, so one malformed expression never
     breaks a larger document/answer being converted."""
     try:
+        if _looks_like_prose(tex):
+            # Restore the $ signs a caller (or tree-sitter-markdown) already
+            # stripped, so the display ends up identical to the untouched
+            # original text instead of silently losing the currency marks.
+            return f"${tex}$"
         tex = _normalize_math_spacing(tex)
         tex = _unicode_scripts(tex)
         return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
