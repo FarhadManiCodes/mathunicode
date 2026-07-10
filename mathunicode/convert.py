@@ -174,3 +174,44 @@ def convert_math_spans(text: str) -> str:
         return latex_to_unicode(m.group(1) or m.group(2))
 
     return re.sub(r"\$\$(.+?)\$\$|\$([^\n$]+?)\$", _sub, text, flags=re.DOTALL)
+
+
+_BARE_DOLLARS_LINE = re.compile(r"^\s*\$\$\s*$")
+
+
+def collapse_math_blocks(text: str) -> str:
+    """Collapse $$ / content / $$ blocks (a bare '$$' line, one or more
+    content lines, another bare '$$' line) into a single line
+    '$$ content $$'.
+
+    Some Markdown renderers (confirmed directly for render-markdown.nvim's
+    LaTeX handler: position="center" is the only mode that actually conceals
+    the raw source, and it's silently overridden to a non-concealing mode
+    whenever the equation's node spans more than one buffer line) only hide
+    the raw $$...$$ source and show the rendered replacement when the
+    equation is written on a single source line. A multi-line block, even
+    though it's the same equation, ends up showing both the raw text and
+    the render side by side with no config fix available -- rewriting it
+    onto one line is the only way to get concealment for that equation.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        if _BARE_DOLLARS_LINE.match(lines[i]):
+            content: list[str] = []
+            j = i + 1
+            while j < len(lines) and not _BARE_DOLLARS_LINE.match(lines[j]):
+                content.append(lines[j].strip())
+                j += 1
+            if j < len(lines) and content:
+                result.append("$$ " + " ".join(content) + " $$")
+                i = j + 1
+                continue
+            # no matching closing $$ (or an empty $$/$$ block) -- unchanged
+            result.append(lines[i])
+            i += 1
+        else:
+            result.append(lines[i])
+            i += 1
+    return "\n".join(result)
