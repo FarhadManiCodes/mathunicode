@@ -42,10 +42,19 @@ _CONTEXT_DB = _build_context_db()
 
 def _normalize_math_spacing(tex: str) -> str:
     """Undo OCR tools' inconsistent spacing around subscripts/superscripts,
-    e.g. 'x _ {i}' -> 'x_{i}' and 'u _ {p h y}' -> 'u_{phy}'."""
+    e.g. 'x _ {i}' -> 'x_{i}' and 'u _ {p h y}' -> 'u_{phy}'.
+
+    Two steps with deliberately different scopes:
+    1. The first substitution strips whitespace -- including newlines --
+       around *every* '_'/'^' in the input, not only script groups. This is
+       intentional: it operates on a single already-isolated math expression,
+       where any space adjacent to a script marker is an OCR artifact.
+    2. The letter-spacing collapse ('p h y' -> 'phy') is then scoped to
+       '_{...}'/'^{...}' groups only, since 'a b' in the body could be
+       intentional (implicit multiplication)."""
     tex = re.sub(r"\s*([_^])\s*", r"\1", tex)
 
-    def _collapse(m: "re.Match") -> str:
+    def _collapse(m: re.Match[str]) -> str:
         return (
             m.group(1)
             + re.sub(r"(?<=[A-Za-z])\s+(?=[A-Za-z])", "", m.group(2))
@@ -73,7 +82,7 @@ _SUP_MAP = {
 }
 
 
-def _scriptify(content: str, mapping: dict) -> "str | None":
+def _scriptify(content: str, mapping: dict[str, str]) -> str | None:
     """Convert content to true Unicode sub/superscript chars if every
     character has one; None if not (caller keeps the current '_word' text --
     no partial conversions, e.g. 'phy' stays 'phy', never 'ₚhy')."""
@@ -103,7 +112,7 @@ def _unicode_scripts(tex: str) -> str:
     meaning, only guards tokenization.
     """
 
-    def _braced(m: "re.Match", mapping: dict) -> str:
+    def _braced(m: re.Match[str], mapping: dict[str, str]) -> str:
         prefix, content = m.group(1) or "", m.group(2)
         if "\\" in content:
             return m.group(0)
@@ -113,7 +122,7 @@ def _unicode_scripts(tex: str) -> str:
         sep = " " if prefix else ""
         return prefix + sep + converted
 
-    def _bare(m: "re.Match", mapping: dict) -> str:
+    def _bare(m: re.Match[str], mapping: dict[str, str]) -> str:
         prefix, ch = m.group(1) or "", m.group(2)
         converted = mapping.get(ch)
         if converted is None:
@@ -123,8 +132,23 @@ def _unicode_scripts(tex: str) -> str:
 
     tex = re.sub(r"(\\[a-zA-Z]+)?_\{([^{}]*)\}", lambda m: _braced(m, _SUB_MAP), tex)
     tex = re.sub(r"(\\[a-zA-Z]+)?\^\{([^{}]*)\}", lambda m: _braced(m, _SUP_MAP), tex)
+
+    # Any '_{...}'/'^{...}' group still present here failed the braced pass
+    # (a backslash, or a character with no Unicode script form) and must be
+    # left whole -- mask it so the bare pass below can't reach *inside* it and
+    # do a partial conversion, e.g. the '_j' of a surviving '^{i_j}' becoming
+    # '^{iⱼ}'. The '\x00N\x00' placeholder can't appear in real LaTeX and
+    # contains no '_'/'^', so it's inert to the bare regexes.
+    saved: list[str] = []
+
+    def _mask(m: re.Match[str]) -> str:
+        saved.append(m.group(0))
+        return f"\x00{len(saved) - 1}\x00"
+
+    tex = re.sub(r"[_^]\{[^{}]*\}", _mask, tex)
     tex = re.sub(r"(\\[a-zA-Z]+)?_([0-9A-Za-z+\-=()])", lambda m: _bare(m, _SUB_MAP), tex)
     tex = re.sub(r"(\\[a-zA-Z]+)?\^([0-9A-Za-z+\-=()])", lambda m: _bare(m, _SUP_MAP), tex)
+    tex = re.sub(r"\x00(\d+)\x00", lambda m: saved[int(m.group(1))], tex)
     return tex
 
 
@@ -168,12 +192,30 @@ def convert_math_spans(text: str) -> str:
     break, but two unrelated dollar amounts in the same paragraph
     ("costs $50 ... $100") easily could, and matching across them would
     feed nonsense into the converter instead of failing loudly.
+
+    A '$' escaped as '\\$' (the standard Markdown escape for a literal dollar)
+    never opens or closes a span -- the '(?<!\\)' guards keep escaped currency
+    like "\\$5 ... \\$10" from being read as one span and mangled.
     """
 
-    def _sub(m: "re.Match") -> str:
-        return latex_to_unicode(m.group(1) or m.group(2))
+    def _sub(m: re.Match[str]) -> str:
+        # group(1) is the $$-display body, group(2) the $-inline body. The
+        # prose guard is applied here (not inside latex_to_unicode) so the
+        # exact original delimiter level -- '$$' vs '$' -- can be restored on
+        # a false positive, rather than always collapsing to a single '$'.
+        display = m.group(1) is not None
+        content = m.group(1) if display else m.group(2)
+        if _looks_like_prose(content):
+            delim = "$$" if display else "$"
+            return f"{delim}{content}{delim}"
+        return latex_to_unicode(content)
 
-    return re.sub(r"\$\$(.+?)\$\$|\$([^\n$]+?)\$", _sub, text, flags=re.DOTALL)
+    return re.sub(
+        r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$([^\n$]+?)(?<!\\)\$",
+        _sub,
+        text,
+        flags=re.DOTALL,
+    )
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^\s*\$\$\s*$")

@@ -3,7 +3,7 @@ name = "mathunicode"
 version = "0.1.0"
 description = "LaTeX -> readable Unicode approximation for terminals/editors, with fixes for macros pylatexenc silently drops or mishandles."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [
   "pylatexenc>=2.10",

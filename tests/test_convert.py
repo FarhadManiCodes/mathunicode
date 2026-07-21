@@ -196,6 +196,29 @@ def test_convert_math_spans_display_can_span_multiple_lines():
     assert "xᵢ" in result
 
 
+def test_convert_math_spans_escaped_dollars_not_a_span():
+    # '\$' is the Markdown escape for a literal dollar. The backslash it
+    # introduces used to defeat the prose guard (which treats any backslash as
+    # "real math"), so escaped currency got paired into a span and mangled.
+    text = r"cost is \$5 and \$10 dollars"
+    assert convert_math_spans(text) == text
+
+
+def test_convert_math_spans_display_prose_restores_double_dollar():
+    # A false positive inside a $$...$$ display block must come back as
+    # $$...$$, not silently downgraded to a single-$ inline span.
+    text = "$$ the quick brown fox jumps $$"
+    assert convert_math_spans(text) == text
+
+
+def test_unicode_scripts_no_partial_conversion_inside_nested_group():
+    # A '_'/'^' group left whole because it isn't fully representable must not
+    # have its interior reached by the bare pass: 'x^{i_j}' stays 'x^{i_j}',
+    # never a partial 'x^{iⱼ}'.
+    assert _unicode_scripts("x^{i_j}") == "x^{i_j}"
+    assert _unicode_scripts("L_{a\\Theta}") == "L_{a\\Theta}"
+
+
 # ---------------------------------------------------------------------------
 # collapse_math_blocks -- fixing render-markdown.nvim's concealment gap
 # ---------------------------------------------------------------------------
