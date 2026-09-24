@@ -172,12 +172,18 @@ def latex_to_unicode(tex: str) -> str:
     readable Unicode approximation. Falls back to the original text on any
     parse failure rather than raising, so one malformed expression never
     breaks a larger document/answer being converted."""
+    if _looks_like_prose(tex):
+        # Restore the $ signs a caller (or tree-sitter-markdown) already
+        # stripped, so the display ends up identical to the untouched
+        # original text instead of silently losing the currency marks.
+        return f"${tex}$"
+    return _convert(tex)
+
+
+def _convert(tex: str) -> str:
+    """The conversion pipeline without the prose guard, for callers that
+    have already applied it. Never raises (see latex_to_unicode)."""
     try:
-        if _looks_like_prose(tex):
-            # Restore the $ signs a caller (or tree-sitter-markdown) already
-            # stripped, so the display ends up identical to the untouched
-            # original text instead of silently losing the currency marks.
-            return f"${tex}$"
         tex = _normalize_math_spacing(tex)
         tex = _unicode_scripts(tex)
         return _CONVERTER.latex_to_text(tex)
@@ -215,7 +221,7 @@ def convert_math_spans(text: str) -> str:
         if _looks_like_prose(content):
             delim = "$$" if display else "$"
             return f"{delim}{content}{delim}"
-        return latex_to_unicode(content)
+        return _convert(content)
 
     return _MATH_SPAN.sub(_sub, text)
 
