@@ -184,23 +184,20 @@ def latex_to_unicode(tex: str) -> str:
             # stripped, so the display ends up identical to the untouched
             # original text instead of silently losing the currency marks.
             return f"${tex}$"
+        return _convert(tex)
     except Exception:
         return tex
-    return _convert(tex)
 
 
 def _convert(tex: str) -> str:
-    """The conversion pipeline without the prose guard, for callers that
-    have already applied it. Never raises (see latex_to_unicode)."""
-    try:
-        tex = _normalize_math_spacing(tex)
-        tex = _unicode_scripts(tex)
-        # A fresh LatexNodes2Text per call, not a shared one: inside math
-        # nodes it temporarily overwrites its own strict_latex_spaces, so
-        # concurrent calls on one instance can leave it permanently wrong.
-        return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
-    except Exception:
-        return tex
+    """The conversion pipeline without the prose guard or the fallback, for
+    callers that apply both themselves."""
+    tex = _normalize_math_spacing(tex)
+    tex = _unicode_scripts(tex)
+    # A fresh LatexNodes2Text per call, not a shared one: inside math nodes it
+    # temporarily overwrites its own strict_latex_spaces, so concurrent calls
+    # on one instance can leave it permanently wrong.
+    return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
 
 
 _MATH_SPAN = re.compile(
@@ -233,7 +230,11 @@ def convert_math_spans(text: str) -> str:
         if _looks_like_prose(content):
             delim = "$$" if display else "$"
             return f"{delim}{content}{delim}"
-        return _convert(content)
+        try:
+            return _convert(content)
+        except Exception:
+            # Leave the span exactly as written, delimiters included.
+            return m.group(0)
 
     return _MATH_SPAN.sub(_sub, text)
 

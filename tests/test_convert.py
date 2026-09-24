@@ -304,3 +304,28 @@ def test_control_space_before_marker_is_kept():
     # Stripping the space of '\ ' would turn it into the escape '\_'.
     assert _normalize_math_spacing("x\\ _1") == "x\\ _1"
     assert latex_to_unicode("x\\ _1") == "x ₁"
+
+
+# ---------------------------------------------------------------------------
+# Fallback on conversion failure
+# ---------------------------------------------------------------------------
+
+
+class _FailingConverter:
+    def __init__(self, **kwargs):
+        pass
+
+    def latex_to_text(self, tex, **kwargs):
+        raise ValueError("boom")
+
+
+def test_latex_to_unicode_fallback_returns_original_input(monkeypatch):
+    # Not the half-processed text ('xᵢ') -- the input exactly as given.
+    monkeypatch.setattr("mathunicode.convert.LatexNodes2Text", _FailingConverter)
+    assert latex_to_unicode("x _ {i}") == "x _ {i}"
+
+
+def test_convert_math_spans_fallback_keeps_span_verbatim(monkeypatch):
+    monkeypatch.setattr("mathunicode.convert.LatexNodes2Text", _FailingConverter)
+    text = "see $x _ {i}$ and $$ y^2 $$ here"
+    assert convert_math_spans(text) == text
