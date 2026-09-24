@@ -278,3 +278,29 @@ def test_latex_to_unicode_is_thread_safe():
         sys.setswitchinterval(old_interval)
     assert not mismatches
     assert {s: latex_to_unicode(s) for s in inputs} == expected
+
+# ---------------------------------------------------------------------------
+# Escaped '\_' and the accent macro '\^' are not script markers
+# ---------------------------------------------------------------------------
+
+
+def test_accent_macro_circumflex_not_treated_as_superscript():
+    # '\^{o}' used to become '\ᵒ' -- an unknown macro pylatexenc drops.
+    assert latex_to_unicode("\\^{o}") == "ô"
+    assert latex_to_unicode("\\^o") == "ô"
+
+
+def test_escaped_underscore_not_treated_as_subscript():
+    assert latex_to_unicode("a\\_1") == "a_1"
+    assert _normalize_math_spacing("a \\_ b") == "a \\_ b"
+
+
+def test_line_break_before_subscript_still_converts():
+    # '\\_1' is a line break followed by a real subscript, not an escape.
+    assert _unicode_scripts("a\\\\_1") == "a\\\\₁"
+
+
+def test_control_space_before_marker_is_kept():
+    # Stripping the space of '\ ' would turn it into the escape '\_'.
+    assert _normalize_math_spacing("x\\ _1") == "x\\ _1"
+    assert latex_to_unicode("x\\ _1") == "x ₁"
