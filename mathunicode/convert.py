@@ -37,7 +37,12 @@ def _build_context_db():
     return db
 
 
-_CONTEXT_DB = _build_context_db()
+_CONVERTER = LatexNodes2Text(latex_context=_build_context_db())
+
+
+_SPACED_MARKER = re.compile(r"\s*([_^])\s*")
+_SPACED_GROUP = re.compile(r"([_^]\{)([^{}]*)\}")
+_LETTER_GAP = re.compile(r"(?<=[A-Za-z])\s+(?=[A-Za-z])")
 
 
 def _normalize_math_spacing(tex: str) -> str:
@@ -52,16 +57,12 @@ def _normalize_math_spacing(tex: str) -> str:
     2. The letter-spacing collapse ('p h y' -> 'phy') is then scoped to
        '_{...}'/'^{...}' groups only, since 'a b' in the body could be
        intentional (implicit multiplication)."""
-    tex = re.sub(r"\s*([_^])\s*", r"\1", tex)
+    tex = _SPACED_MARKER.sub(r"\1", tex)
 
     def _collapse(m: re.Match[str]) -> str:
-        return (
-            m.group(1)
-            + re.sub(r"(?<=[A-Za-z])\s+(?=[A-Za-z])", "", m.group(2))
-            + "}"
-        )
+        return m.group(1) + _LETTER_GAP.sub("", m.group(2)) + "}"
 
-    return re.sub(r"([_^]\{)([^{}]*)\}", _collapse, tex)
+    return _SPACED_GROUP.sub(_collapse, tex)
 
 
 # Unicode has no dedicated subscript/superscript glyph for every character --
@@ -149,6 +150,9 @@ def _unicode_scripts(tex: str) -> str:
     return _MASK_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], tex)
 
 
+_WORD = re.compile(r"[A-Za-z]{2,}")
+
+
 def _looks_like_prose(content: str) -> bool:
     """Guard against $...$ span detection (both this package's own
     convert_math_spans and, confirmed directly via treesitter, tree-sitter-
@@ -160,7 +164,7 @@ def _looks_like_prose(content: str) -> bool:
     positive, not an equation."""
     if "\\" in content or "_" in content or "^" in content:
         return False
-    return len(re.findall(r"[A-Za-z]{2,}", content)) >= 3
+    return len(_WORD.findall(content)) >= 3
 
 
 def latex_to_unicode(tex: str) -> str:
@@ -176,9 +180,15 @@ def latex_to_unicode(tex: str) -> str:
             return f"${tex}$"
         tex = _normalize_math_spacing(tex)
         tex = _unicode_scripts(tex)
-        return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
+        return _CONVERTER.latex_to_text(tex)
     except Exception:
         return tex
+
+
+_MATH_SPAN = re.compile(
+    r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$([^\n$]+?)(?<!\\)\$",
+    flags=re.DOTALL,
+)
 
 
 def convert_math_spans(text: str) -> str:
@@ -207,12 +217,7 @@ def convert_math_spans(text: str) -> str:
             return f"{delim}{content}{delim}"
         return latex_to_unicode(content)
 
-    return re.sub(
-        r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$([^\n$]+?)(?<!\\)\$",
-        _sub,
-        text,
-        flags=re.DOTALL,
-    )
+    return _MATH_SPAN.sub(_sub, text)
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^\s*\$\$\s*$")
