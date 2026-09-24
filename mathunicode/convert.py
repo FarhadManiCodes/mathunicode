@@ -37,7 +37,7 @@ def _build_context_db():
     return db
 
 
-_CONVERTER = LatexNodes2Text(latex_context=_build_context_db())
+_CONTEXT_DB = _build_context_db()
 
 
 _SPACED_MARKER = re.compile(r"\s*([_^])\s*")
@@ -186,7 +186,10 @@ def _convert(tex: str) -> str:
     try:
         tex = _normalize_math_spacing(tex)
         tex = _unicode_scripts(tex)
-        return _CONVERTER.latex_to_text(tex)
+        # A fresh LatexNodes2Text per call, not a shared one: inside math
+        # nodes it temporarily overwrites its own strict_latex_spaces, so
+        # concurrent calls on one instance can leave it permanently wrong.
+        return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
     except Exception:
         return tex
 

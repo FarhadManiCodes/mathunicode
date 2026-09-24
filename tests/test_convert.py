@@ -247,3 +247,34 @@ def test_collapse_math_blocks_multiple_blocks_in_one_document():
 def test_collapse_math_blocks_no_matching_close_left_untouched():
     text = "$$\nunclosed content"
     assert collapse_math_blocks(text) == text
+
+
+def test_latex_to_unicode_is_thread_safe():
+    # pylatexenc's LatexNodes2Text temporarily overwrites its own settings
+    # inside math nodes like '\(...\)'; a converter shared across threads got
+    # permanently corrupted by interleaved save/restore.
+    import sys
+    import threading
+
+    inputs = ["\\alpha \\beta x \\(\\gamma  y\\) \\sum z", "a \\det c", "\\[ \\alpha  x \\] \\cot y"]
+    expected = {s: latex_to_unicode(s) for s in inputs}
+    mismatches = []
+
+    def work(k):
+        for i in range(300):
+            s = inputs[(i + k) % len(inputs)]
+            if latex_to_unicode(s) != expected[s]:
+                mismatches.append(s)
+
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=work, args=(k,)) for k in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old_interval)
+    assert not mismatches
+    assert {s: latex_to_unicode(s) for s in inputs} == expected
