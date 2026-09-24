@@ -239,7 +239,9 @@ def convert_math_spans(text: str) -> str:
     return _MATH_SPAN.sub(_sub, text)
 
 
-_BARE_DOLLARS_LINE = re.compile(r"^\s*\$\$\s*$")
+_BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_TEX_COMMENT = re.compile(r"(?<!\\)%")
 
 
 def collapse_math_blocks(text: str) -> str:
@@ -256,25 +258,37 @@ def collapse_math_blocks(text: str) -> str:
     though it's the same equation, ends up showing both the raw text and
     the render side by side with no config fix available -- rewriting it
     onto one line is the only way to get concealment for that equation.
+
+    The collapsed line keeps the opening '$$' line's indentation (so a block
+    inside a list item stays in it) and its CRLF ending, if any. Blank content
+    lines are dropped. Left unchanged: blocks inside fenced code, blocks with
+    no closing '$$', empty blocks, and blocks with a '%' comment -- joining
+    their lines would comment out the rest of the equation.
     """
     lines = text.split("\n")
     result: list[str] = []
+    fence: str | None = None  # the opening fence while inside fenced code
     i = 0
     while i < len(lines):
-        if _BARE_DOLLARS_LINE.match(lines[i]):
-            content: list[str] = []
+        line = lines[i]
+        if fence is not None:
+            if re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$", line):
+                fence = None
+        elif fence_match := _FENCE.match(line):
+            fence = fence_match.group(1)
+        elif opener := _BARE_DOLLARS_LINE.match(line):
             j = i + 1
             while j < len(lines) and not _BARE_DOLLARS_LINE.match(lines[j]):
-                content.append(lines[j].strip())
                 j += 1
-            if j < len(lines) and content:
-                result.append("$$ " + " ".join(content) + " $$")
+            if j < len(lines):
+                content = [c.strip() for c in lines[i + 1 : j] if c.strip()]
+                if content and not any(_TEX_COMMENT.search(c) for c in content):
+                    eol = "\r" if lines[j].endswith("\r") else ""
+                    result.append(f"{opener.group(1)}$$ {' '.join(content)} $${eol}")
+                else:
+                    result.extend(lines[i : j + 1])
                 i = j + 1
                 continue
-            # no matching closing $$ (or an empty $$/$$ block) -- unchanged
-            result.append(lines[i])
-            i += 1
-        else:
-            result.append(lines[i])
-            i += 1
+        result.append(line)
+        i += 1
     return "\n".join(result)

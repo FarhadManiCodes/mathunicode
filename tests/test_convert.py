@@ -329,3 +329,43 @@ def test_convert_math_spans_fallback_keeps_span_verbatim(monkeypatch):
     monkeypatch.setattr("mathunicode.convert.LatexNodes2Text", _FailingConverter)
     text = "see $x _ {i}$ and $$ y^2 $$ here"
     assert convert_math_spans(text) == text
+
+
+def test_collapse_math_blocks_empty_block_does_not_mispair():
+    # The empty block's closing '$$' must not become the opener of a new
+    # block that swallows the prose line after it.
+    text = "$$\n$$\nprose line\n$$\nmore"
+    assert collapse_math_blocks(text) == text
+
+
+def test_collapse_math_blocks_keeps_indentation():
+    text = "- item\n  $$\n  x\n  $$\n"
+    assert collapse_math_blocks(text) == "- item\n  $$ x $$\n"
+
+
+def test_collapse_math_blocks_keeps_crlf_line_ending():
+    text = "a\r\n$$\r\nx\r\n$$\r\nb\r\n"
+    assert collapse_math_blocks(text) == "a\r\n$$ x $$\r\nb\r\n"
+
+
+def test_collapse_math_blocks_skips_fenced_code():
+    for fence in ("```", "~~~", "````"):
+        text = f"{fence}\n$$\nx\n$$\n{fence}\n$$\ny\n$$"
+        assert collapse_math_blocks(text) == f"{fence}\n$$\nx\n$$\n{fence}\n$$ y $$"
+
+
+def test_collapse_math_blocks_shorter_fence_does_not_close():
+    text = "````\n```\n$$\nx\n$$\n````"
+    assert collapse_math_blocks(text) == text
+
+
+def test_collapse_math_blocks_drops_blank_content_lines():
+    assert collapse_math_blocks("$$\na\n\nb\n$$") == "$$ a b $$"
+
+
+def test_collapse_math_blocks_leaves_tex_comment_block_untouched():
+    # Joined onto one line, '% c' would comment out '+ y' as well.
+    text = "$$\nx % c\n+ y\n$$"
+    assert collapse_math_blocks(text) == text
+    # An escaped '\%' is a literal percent sign, not a comment.
+    assert collapse_math_blocks("$$\n50\\%\n$$") == "$$ 50\\% $$"
