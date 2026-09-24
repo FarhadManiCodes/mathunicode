@@ -10,11 +10,25 @@ library (149 unique macro names), not guessed.
 
 import re
 
+from pylatexenc import latexwalker, macrospec
 from pylatexenc.latex2text import (
     LatexNodes2Text,
     MacroTextSpec,
     get_default_latex_context_db,
 )
+
+
+def _build_parse_db():
+    """Parser-side specs for fixed macros that take arguments -- without one,
+    pylatexenc parses '\\pmod{n}' as an argument-less macro followed by a
+    separate '{n}' group, and the text spec below never sees the 'n'."""
+    db = latexwalker.get_default_latex_context_db()
+    db.add_context_category(
+        "mathunicode-fixes",
+        prepend=True,
+        macros=[macrospec.std_macro("pmod", False, 1)],
+    )
+    return db
 
 
 def _build_context_db():
@@ -32,11 +46,30 @@ def _build_context_db():
             MacroTextSpec("cot", simplify_repl="cot"),
             MacroTextSpec("csc", simplify_repl="csc"),
             MacroTextSpec("det", simplify_repl="det"),
+            # Operator names and symbols pylatexenc drops entirely.
+            MacroTextSpec("sec", simplify_repl="sec"),
+            MacroTextSpec("coth", simplify_repl="coth"),
+            MacroTextSpec("lg", simplify_repl="lg"),
+            MacroTextSpec("ker", simplify_repl="ker"),
+            MacroTextSpec("dim", simplify_repl="dim"),
+            MacroTextSpec("deg", simplify_repl="deg"),
+            MacroTextSpec("gcd", simplify_repl="gcd"),
+            MacroTextSpec("hom", simplify_repl="hom"),
+            MacroTextSpec("mod", simplify_repl="mod"),
+            MacroTextSpec("bmod", simplify_repl="mod"),
+            MacroTextSpec("pmod", simplify_repl="(mod %s)"),
+            MacroTextSpec("lor", simplify_repl="∨"),
+            MacroTextSpec("neg", simplify_repl="¬"),
+            MacroTextSpec("iff", simplify_repl="⟺"),
+            MacroTextSpec("implies", simplify_repl="⟹"),
+            MacroTextSpec("impliedby", simplify_repl="⟸"),
+            MacroTextSpec("gets", simplify_repl="←"),
         ],
     )
     return db
 
 
+_PARSE_DB = _build_parse_db()
 _CONTEXT_DB = _build_context_db()
 
 
@@ -197,7 +230,8 @@ def _convert(tex: str) -> str:
     # A fresh LatexNodes2Text per call, not a shared one: inside math nodes it
     # temporarily overwrites its own strict_latex_spaces, so concurrent calls
     # on one instance can leave it permanently wrong.
-    return LatexNodes2Text(latex_context=_CONTEXT_DB).latex_to_text(tex)
+    converter = LatexNodes2Text(latex_context=_CONTEXT_DB)
+    return converter.latex_to_text(tex, latex_context=_PARSE_DB)
 
 
 _MATH_SPAN = re.compile(

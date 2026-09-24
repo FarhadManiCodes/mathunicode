@@ -369,3 +369,31 @@ def test_collapse_math_blocks_leaves_tex_comment_block_untouched():
     assert collapse_math_blocks(text) == text
     # An escaped '\%' is a literal percent sign, not a comment.
     assert collapse_math_blocks("$$\n50\\%\n$$") == "$$ 50\\% $$"
+
+
+def test_latex_to_unicode_more_previously_dropped_macros():
+    # pylatexenc drops all of these entirely.
+    cases = {
+        "\\sec(x)": "sec(x)",
+        "\\coth(x)": "coth(x)",
+        "\\lg(n)": "lg(n)",
+        "\\ker(f)": "ker(f)",
+        "\\dim(V)": "dim(V)",
+        "\\deg(p)": "deg(p)",
+        "\\gcd(a,b)": "gcd(a,b)",
+        "\\hom(A,B)": "hom(A,B)",
+        "(a)\\bmod(n)": "(a)mod(n)",
+        "(p)\\lor(q)": "(p)∨(q)",
+        "\\neg(p)": "¬(p)",
+        "(A)\\iff(B)": "(A)⟺(B)",
+        "(A)\\implies(B)": "(A)⟹(B)",
+        "(A)\\impliedby(B)": "(A)⟸(B)",
+        "x\\gets(1)": "x←(1)",
+    }
+    for tex, expected in cases.items():
+        assert latex_to_unicode(tex) == expected, tex
+
+
+def test_latex_to_unicode_pmod_keeps_its_argument():
+    # Used to give 'a n' -- the 'mod' lost, only the argument left.
+    assert latex_to_unicode("a\\pmod{n}") == "a(mod n)"
