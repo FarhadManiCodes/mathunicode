@@ -82,6 +82,14 @@ _SUP_MAP = {
 }
 
 
+# Script-marker patterns for _unicode_scripts. 'prefix' captures a bare macro
+# name immediately before the marker (see the protecting-space note there).
+_BRACED_SCRIPT = re.compile(r"(?P<prefix>\\[a-zA-Z]+)?(?P<marker>[_^])\{(?P<content>[^{}]*)\}")
+_BARE_SCRIPT = re.compile(r"(?P<prefix>\\[a-zA-Z]+)?(?P<marker>[_^])(?P<content>[0-9A-Za-z+\-=()])")
+_SCRIPT_GROUP = re.compile(r"[_^]\{[^{}]*\}")
+_MASK_PLACEHOLDER = re.compile(r"\x00(\d+)\x00")
+
+
 def _scriptify(content: str, mapping: dict[str, str]) -> str | None:
     """Convert content to true Unicode sub/superscript chars if every
     character has one; None if not (caller keeps the current '_word' text --
@@ -112,44 +120,33 @@ def _unicode_scripts(tex: str) -> str:
     meaning, only guards tokenization.
     """
 
-    def _braced(m: re.Match[str], mapping: dict[str, str]) -> str:
-        prefix, content = m.group(1) or "", m.group(2)
-        if "\\" in content:
-            return m.group(0)
-        converted = _scriptify(content, mapping)
+    def _replace(m: re.Match[str]) -> str:
+        prefix = m.group("prefix") or ""
+        content = m.group("content")
+        mapping = _SUB_MAP if m.group("marker") == "_" else _SUP_MAP
+        converted = None if "\\" in content else _scriptify(content, mapping)
         if converted is None:
             return m.group(0)
         sep = " " if prefix else ""
         return prefix + sep + converted
 
-    def _bare(m: re.Match[str], mapping: dict[str, str]) -> str:
-        prefix, ch = m.group(1) or "", m.group(2)
-        converted = mapping.get(ch)
-        if converted is None:
-            return m.group(0)
-        sep = " " if prefix else ""
-        return prefix + sep + converted
-
-    tex = re.sub(r"(\\[a-zA-Z]+)?_\{([^{}]*)\}", lambda m: _braced(m, _SUB_MAP), tex)
-    tex = re.sub(r"(\\[a-zA-Z]+)?\^\{([^{}]*)\}", lambda m: _braced(m, _SUP_MAP), tex)
+    tex = _BRACED_SCRIPT.sub(_replace, tex)
 
     # Any '_{...}'/'^{...}' group still present here failed the braced pass
     # (a backslash, or a character with no Unicode script form) and must be
     # left whole -- mask it so the bare pass below can't reach *inside* it and
     # do a partial conversion, e.g. the '_j' of a surviving '^{i_j}' becoming
     # '^{iⱼ}'. The '\x00N\x00' placeholder can't appear in real LaTeX and
-    # contains no '_'/'^', so it's inert to the bare regexes.
+    # contains no '_'/'^', so it's inert to the bare regex.
     saved: list[str] = []
 
     def _mask(m: re.Match[str]) -> str:
         saved.append(m.group(0))
         return f"\x00{len(saved) - 1}\x00"
 
-    tex = re.sub(r"[_^]\{[^{}]*\}", _mask, tex)
-    tex = re.sub(r"(\\[a-zA-Z]+)?_([0-9A-Za-z+\-=()])", lambda m: _bare(m, _SUB_MAP), tex)
-    tex = re.sub(r"(\\[a-zA-Z]+)?\^([0-9A-Za-z+\-=()])", lambda m: _bare(m, _SUP_MAP), tex)
-    tex = re.sub(r"\x00(\d+)\x00", lambda m: saved[int(m.group(1))], tex)
-    return tex
+    tex = _SCRIPT_GROUP.sub(_mask, tex)
+    tex = _BARE_SCRIPT.sub(_replace, tex)
+    return _MASK_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], tex)
 
 
 def _looks_like_prose(content: str) -> bool:
