@@ -172,11 +172,14 @@ def latex_to_unicode(tex: str) -> str:
     readable Unicode approximation. Falls back to the original text on any
     parse failure rather than raising, so one malformed expression never
     breaks a larger document/answer being converted."""
-    if _looks_like_prose(tex):
-        # Restore the $ signs a caller (or tree-sitter-markdown) already
-        # stripped, so the display ends up identical to the untouched
-        # original text instead of silently losing the currency marks.
-        return f"${tex}$"
+    try:
+        if _looks_like_prose(tex):
+            # Restore the $ signs a caller (or tree-sitter-markdown) already
+            # stripped, so the display ends up identical to the untouched
+            # original text instead of silently losing the currency marks.
+            return f"${tex}$"
+    except Exception:
+        return tex
     return _convert(tex)
 
 
