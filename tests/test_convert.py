@@ -397,3 +397,64 @@ def test_latex_to_unicode_more_previously_dropped_macros():
 def test_latex_to_unicode_pmod_keeps_its_argument():
     # Used to give 'a n' -- the 'mod' lost, only the argument left.
     assert latex_to_unicode("a\\pmod{n}") == "a(mod n)"
+
+
+# ---------------------------------------------------------------------------
+# convert_math_spans -- which '$'s pair up
+# ---------------------------------------------------------------------------
+
+
+def test_convert_math_spans_currency_never_pairs():
+    for text in ("pay $5 or $6", "costs $5-$10", "from $250 to $10,000.", "US $49.99 CAN $52.99"):
+        assert convert_math_spans(text) == text
+
+
+def test_convert_math_spans_rejected_match_does_not_swallow_real_math():
+    # A '$' that doesn't open a span must not eat the opening '$' of a real
+    # span after it.
+    assert convert_math_spans("pay $5 or $x$ now") == "pay $5 or x now"
+    assert convert_math_spans("pay $5 for $x^2$") == "pay $5 for x²"
+    # Nor may a prose-guard rejection eat it.
+    assert convert_math_spans("The $ sign is used a lot, $x$") == "The $ sign is used a lot, x"
+
+
+def test_convert_math_spans_symbol_before_number():
+    # The no-digit-after-closing-'$' rule only applies to bodies that start
+    # with a digit (currency); '$\pm$0.26' is still math.
+    assert convert_math_spans("0.20$\\pm$0.26") == "0.20±0.26"
+    assert convert_math_spans("$\\gg$175B") == "≫175B"
+
+
+def test_convert_math_spans_ocr_padding():
+    # OCR output pads inline spans: '$ r $', and sometimes only one side.
+    assert convert_math_spans("an $ r $ -dimensional") == "an r -dimensional"
+    assert convert_math_spans("$ x _ {i} $ ok") == "xᵢ ok"
+    assert convert_math_spans("$ t\\in[0,1]$ ;") == "t∈[0,1] ;"
+    assert convert_math_spans("$C_{\\alpha}^{*} $ is") == "C_α^* is"
+
+
+def test_convert_math_spans_trailing_pad_needs_latex():
+    # Space only before the closing '$' is accepted only for clear LaTeX;
+    # otherwise it looks just like '$5 or $'.
+    assert convert_math_spans("$^ -o $@") == "$^ -o $@"
+    assert convert_math_spans("$5 for a \\to b $") == "$5 for a \\to b $"
+
+
+def test_convert_math_spans_strips_padding_from_output():
+    assert convert_math_spans("$$ \\alpha $$") == "α"
+    assert convert_math_spans("before\n$$\nx_{i}\n$$\nafter") == "before\nxᵢ\nafter"
+
+
+def test_convert_math_spans_skips_inline_code():
+    assert convert_math_spans("run `echo $HOME and $PATH` now") == "run `echo $HOME and $PATH` now"
+    # The code span's '$' must not pair with the real math opener after it.
+    assert convert_math_spans("see `$HOME` and $x$") == "see `$HOME` and x"
+    assert convert_math_spans("``a ` $x$ ``, $y_1$") == "``a ` $x$ ``, y₁"
+
+
+def test_convert_math_spans_skips_fenced_code():
+    assert convert_math_spans("```\nx = $a$\n```\n$b^2$") == "```\nx = $a$\n```\nb²"
+    # A shorter or different fence inside doesn't close it.
+    assert convert_math_spans("~~~~\n```\n$a$\n~~~~\n$b^2$") == "~~~~\n```\n$a$\n~~~~\nb²"
+    # An unclosed fence runs to the end of the text.
+    assert convert_math_spans("```\n$a$") == "```\n$a$"

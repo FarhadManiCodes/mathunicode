@@ -234,10 +234,37 @@ def _convert(tex: str) -> str:
     return converter.latex_to_text(tex, latex_context=_PARSE_DB)
 
 
+# Math spans, tried in order at each position. '\x01' is excluded from span
+# bodies so a span never reaches into a masked code region (see _CODE).
 _MATH_SPAN = re.compile(
-    r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$([^\n$]+?)(?<!\\)\$",
-    flags=re.DOTALL,
+    # $$...$$ display math, possibly multi-line.
+    r"(?<!\\)\$\$(?P<display>[^\x01]+?)(?<!\\)\$\$"
+    # $...$ inline math by Pandoc's rule: no whitespace just inside either
+    # '$', and -- when the body starts with a digit, as currency does -- the
+    # closing '$' not followed by a digit, so '$5-$10' never pairs up while
+    # '$\pm$0.26' still does.
+    r"|(?<!\\)\$(?=(?P<num>\d)?)(?P<inline>(?=[^\s$])[^\n$\x01]*?[^\s\\$\x01])\$(?(num)(?!\d))"
+    # ...or whitespace just inside the opening '$', as OCR tools (e.g. MinerU)
+    # write inline spans: '$ r $', '$ x _ {i} $', sometimes '$ t\in[0,1]$'.
+    # A currency '$' is followed by the amount, never by a space.
+    r"|(?<!\\)\$[ \t]+(?P<padded>[^\s$\x01](?:[^\n$\x01]*?[^\s\\$\x01])?)[ \t]*\$"
+    # ...or whitespace just inside the closing '$' only ('$(x) \to y $'),
+    # accepted only when the body is clearly LaTeX: prose like '$5 or $' can
+    # look just like this.
+    r"|(?<!\\)\$(?P<tail>(?=[^\s$\d])(?=[^\n$\x01]*?(?:\\[A-Za-z]|[_^]\{))[^\n$\x01]*?[^\s\\$\x01])[ \t]+\$"
 )
+
+# Markdown code, whose '$'s are never math: fenced blocks (closed by a fence
+# of the same character at least as long, or running to the end of the text
+# if unclosed) and inline code spans (closed by a backtick run of the same
+# length, within one paragraph).
+_CODE = re.compile(
+    r"^ {0,3}(?P<fence>(?P<char>[`~])(?P=char){2,}).*?"
+    r"(?:^ {0,3}(?P=fence)(?P=char)*[ \t]*$|\Z)"
+    r"|(?P<ticks>`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)(?P=ticks)(?!`)",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_CODE_PLACEHOLDER = re.compile(r"\x01(\d+)\x01")
 
 
 def convert_math_spans(text: str) -> str:
@@ -247,30 +274,45 @@ def convert_math_spans(text: str) -> str:
     restricted to one line -- real inline math never spans a paragraph
     break, but two unrelated dollar amounts in the same paragraph
     ("costs $50 ... $100") easily could, and matching across them would
-    feed nonsense into the converter instead of failing loudly.
+    feed nonsense into the converter instead of failing loudly. Within a
+    line, $...$ follows Pandoc's rule, or is padded with spaces the way OCR
+    output writes it (see _MATH_SPAN for the exact rules).
 
     A '$' escaped as '\\$' (the standard Markdown escape for a literal dollar)
     never opens or closes a span -- the '(?<!\\)' guards keep escaped currency
-    like "\\$5 ... \\$10" from being read as one span and mangled.
+    like "\\$5 ... \\$10" from being read as one span and mangled. Nor does a
+    '$' inside Markdown code (`...` spans, ```/~~~ fences), e.g. `echo $HOME`.
     """
+    saved: list[str] = []
 
-    def _sub(m: re.Match[str]) -> str:
-        # group(1) is the $$-display body, group(2) the $-inline body. The
-        # prose guard is applied here (not inside latex_to_unicode) so the
-        # exact original delimiter level -- '$$' vs '$' -- can be restored on
-        # a false positive, rather than always collapsing to a single '$'.
-        display = m.group(1) is not None
-        content = m.group(1) if display else m.group(2)
+    def _mask(m: re.Match[str]) -> str:
+        saved.append(m.group(0))
+        return f"\x01{len(saved) - 1}\x01"
+
+    text = _CODE.sub(_mask, text)
+    out: list[str] = []
+    pos = 0
+    while m := _MATH_SPAN.search(text, pos):
+        content = m.group("display") or m.group("inline") or m.group("padded") or m.group("tail")
         if _looks_like_prose(content):
-            delim = "$$" if display else "$"
-            return f"{delim}{content}{delim}"
+            # Not math, so leave it. An inline match is left only up to its
+            # opening '$': its closing '$' may open a real span ('The $ sign
+            # is common, $x$ is not'), so the search resumes right there.
+            resume = m.end() if m.group("display") is not None else m.start() + 1
+            out.append(text[pos:resume])
+            pos = resume
+            continue
         try:
-            return _convert(content)
+            converted = _convert(content.strip())
         except Exception:
             # Leave the span exactly as written, delimiters included.
-            return m.group(0)
-
-    return _MATH_SPAN.sub(_sub, text)
+            converted = m.group(0)
+        out.append(text[pos : m.start()])
+        out.append(converted)
+        pos = m.end()
+    out.append(text[pos:])
+    text = "".join(out)
+    return _CODE_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], text)
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
