@@ -150,7 +150,7 @@ def _unicode_scripts(tex: str) -> str:
     return _MASK_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], tex)
 
 
-_WORD = re.compile(r"[A-Za-z]{2,}")
+_PROSE_WORD = re.compile(r"[A-Za-z]{2,}")
 
 
 def _looks_like_prose(content: str) -> bool:
@@ -164,7 +164,7 @@ def _looks_like_prose(content: str) -> bool:
     positive, not an equation."""
     if "\\" in content or "_" in content or "^" in content:
         return False
-    return len(_WORD.findall(content)) >= 3
+    return len(_PROSE_WORD.findall(content)) >= 3
 
 
 def latex_to_unicode(tex: str) -> str:
