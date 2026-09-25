@@ -664,3 +664,10 @@ def test_default_templates_tolerate_missing_arguments():
     assert latex_to_unicode("\\sqrt[3]{x}") == "√(x)"
     assert latex_to_unicode("\\braket{a}{b}") == "⟨a|b⟩"
     assert latex_to_unicode("\\footnote{hi}") == "[hi]"
+
+
+def test_collapse_math_blocks_closer_inside_later_fence_does_not_count():
+    # The '$$' inside the fence used to close the block opened above it,
+    # pulling the fence line into the collapsed equation.
+    text = "$$\na\n```\n$$\n```"
+    assert collapse_math_blocks(text) == text

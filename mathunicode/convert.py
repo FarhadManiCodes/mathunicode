@@ -565,8 +565,22 @@ def convert_math_spans(text: str) -> str:
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
-_FENCE = re.compile(rf"^{_FENCE_OPEN_PREFIX}(`{{3,}}(?=[^`]*$)|~{{3,}})")
 _TEX_COMMENT = re.compile(r"(?<!\\)%")
+
+
+def _fenced_lines(text: str, line_count: int) -> list[bool]:
+    """For each '\\n'-separated line, whether it's part of a fenced code
+    block -- the same fences convert_math_spans masks (_FENCED_CODE)."""
+    in_code = [False] * line_count
+    line, pos = 0, 0  # line number at text offset pos, counted incrementally
+    for m in _FENCED_CODE.finditer(text):
+        line += text.count("\n", pos, m.start())
+        first = line
+        line += text.count("\n", m.start(), m.end())
+        pos = m.end()
+        for k in range(first, min(line, line_count - 1) + 1):
+            in_code[k] = True
+    return in_code
 
 
 def collapse_math_blocks(text: str) -> str:
@@ -587,25 +601,21 @@ def collapse_math_blocks(text: str) -> str:
     The collapsed line keeps the opening '$$' line's indentation (so a block
     inside a list item stays in it) and its CRLF ending, if any. Blank content
     lines are dropped. Left unchanged: blocks inside fenced code, blocks with
-    no closing '$$', empty blocks, and blocks with a '%' comment -- joining
-    their lines would comment out the rest of the equation.
+    no closing '$$' (one inside a later code fence doesn't count), empty
+    blocks, and blocks with a '%' comment -- joining their lines would
+    comment out the rest of the equation.
     """
     lines = text.split("\n")
+    in_code = _fenced_lines(text, len(lines))
     result: list[str] = []
-    fence: str | None = None  # the opening fence while inside fenced code
     i = 0
     while i < len(lines):
         line = lines[i]
-        if fence is not None:
-            if re.match(rf"^{_FENCE_CLOSE_PREFIX}{re.escape(fence[0])}{{{len(fence)},}}\s*$", line):
-                fence = None
-        elif fence_match := _FENCE.match(line):
-            fence = fence_match.group(1)
-        elif opener := _BARE_DOLLARS_LINE.match(line):
+        if not in_code[i] and (opener := _BARE_DOLLARS_LINE.match(line)):
             j = i + 1
-            while j < len(lines) and not _BARE_DOLLARS_LINE.match(lines[j]):
+            while j < len(lines) and not in_code[j] and not _BARE_DOLLARS_LINE.match(lines[j]):
                 j += 1
-            if j < len(lines):
+            if j < len(lines) and not in_code[j]:
                 content = [c.strip() for c in lines[i + 1 : j] if c.strip()]
                 if content and not any(_TEX_COMMENT.search(c) for c in content):
                     eol = "\r" if lines[j].endswith("\r") else ""
