@@ -626,7 +626,7 @@ def test_argument_macros_tolerate_missing_arguments():
     assert latex_to_unicode("\\binom{n}") == "n"
     assert latex_to_unicode("a \\pmod") == "a mod"
     assert latex_to_unicode("x + \\xrightarrow") == "x + →"
-    assert latex_to_unicode("a + \\overline") == "a + "
+    assert latex_to_unicode("a + \\overline") == "a +"
 
 
 def test_wide_accent_skips_scripted_arguments():
@@ -656,8 +656,8 @@ def test_default_templates_tolerate_missing_arguments():
     # pylatexenc's own '%s' templates leaked ('\frac{a}' -> '%s/%sa') or raised
     # (a bare '\sqrt', so the whole expression came back raw).
     assert latex_to_unicode("\\frac{a}") == "a"
-    assert latex_to_unicode("x + \\frac") == "x + "
-    assert latex_to_unicode("x + \\sqrt") == "x + "
+    assert latex_to_unicode("x + \\frac") == "x +"
+    assert latex_to_unicode("x + \\sqrt") == "x +"
     assert latex_to_unicode("\\braket{a}") == "a"
     # Complete input is filled as before.
     assert latex_to_unicode("\\frac{a}{b}") == "a/b"
@@ -671,3 +671,32 @@ def test_collapse_math_blocks_closer_inside_later_fence_does_not_count():
     # pulling the fence line into the collapsed equation.
     text = "$$\na\n```\n$$\n```"
     assert collapse_math_blocks(text) == text
+
+
+# ---------------------------------------------------------------------------
+# Source line breaks vs. rows
+# ---------------------------------------------------------------------------
+
+
+def test_source_newline_is_a_space():
+    # In LaTeX a source line break is only whitespace; it used to come out as
+    # a line break, i.e. a bogus extra row.
+    assert latex_to_unicode("a +\nb") == "a + b"
+    assert latex_to_unicode("x_{i}\n\\le y") == "xᵢ ≤ y"
+    assert latex_to_unicode("a\r\nb") == "a b"
+
+
+def test_comment_does_not_swallow_the_next_line():
+    assert latex_to_unicode("x % note\n+ y") == "x + y"
+    assert latex_to_unicode("50\\%") == "50%"
+
+
+def test_rows_come_only_from_line_break_macro():
+    assert latex_to_unicode("a \\\\ b") == "a\nb"
+    # A leading or trailing '\\' makes no empty row.
+    assert latex_to_unicode("\\\\ x \\\\") == "x"
+    assert latex_to_unicode("\\quad x") == "x"
+
+
+def test_convert_math_spans_multiline_display_source():
+    assert convert_math_spans("t\n$$\na +\nb\n$$\nu") == "t\na + b\nu"

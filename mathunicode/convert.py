@@ -233,6 +233,28 @@ _SPACED_GROUP = re.compile(rf"({_MARKER}\{{)([^{{}}]*)\}}")
 _LETTER_GAP = re.compile(r"(?<=[A-Za-z])\s+(?=[A-Za-z])")
 
 
+# A TeX comment: an unescaped '%' ('\\%' is a literal percent; '\\\\%' a line
+# break and then a comment) to the end of its line.
+_TEX_COMMENT = re.compile(r"(?<!(?<!\\)\\)%[^\n]*")
+# A line break in the source, with the whitespace around it.
+_SOURCE_NEWLINE = re.compile(r"[ \t]*\r?\n\s*")
+
+
+def _join_source_lines(tex: str) -> str:
+    """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
+    come from '\\\\', never from source line breaks, so the source is joined
+    onto one line -- comments first, or joining would let a comment swallow
+    the lines after it (pylatexenc drops comments anyway)."""
+    return _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
+
+
+def _tidy_rows(text: str) -> str:
+    """pylatexenc's output, one row per line (rows come only from '\\\\' now),
+    each row trimmed and empty rows -- from a leading or trailing '\\\\' --
+    dropped."""
+    return "\n".join(row for row in (r.strip() for r in text.split("\n")) if row)
+
+
 def _normalize_math_spacing(tex: str) -> str:
     """Undo OCR tools' inconsistent spacing around subscripts/superscripts,
     e.g. 'x _ {i}' -> 'x_{i}' and 'u _ {p h y}' -> 'u_{phy}'.
@@ -436,6 +458,7 @@ def latex_to_unicode(tex: str) -> str:
 def _convert(tex: str) -> str:
     """The conversion pipeline without the prose guard or the fallback, for
     callers that apply both themselves."""
+    tex = _join_source_lines(tex)
     tex = _normalize_math_spacing(tex)
     tex = _keep_space_after_macros(tex)
     tex = _unicode_scripts(tex)
@@ -443,7 +466,7 @@ def _convert(tex: str) -> str:
     # temporarily overwrites its own strict_latex_spaces, so concurrent calls
     # on one instance can leave it permanently wrong.
     converter = LatexNodes2Text(latex_context=_CONTEXT_DB)
-    return converter.latex_to_text(tex, latex_context=_PARSE_DB)
+    return _tidy_rows(converter.latex_to_text(tex, latex_context=_PARSE_DB))
 
 
 # Math spans, tried in order at each position. '\x01' is excluded from span
@@ -582,7 +605,6 @@ def convert_math_spans(text: str) -> str:
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
-_TEX_COMMENT = re.compile(r"(?<!\\)%")
 
 
 def _fenced_lines(text: str, line_count: int) -> list[bool]:
