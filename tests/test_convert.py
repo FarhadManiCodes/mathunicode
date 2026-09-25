@@ -497,3 +497,15 @@ def test_no_space_added_where_source_has_none():
     assert latex_to_unicode("\\sin\\theta") == "sinθ"
     assert latex_to_unicode("\\max_i x_i") == "maxᵢ xᵢ"
     assert latex_to_unicode("\\sin \\left( x \\right)") == "sin( x )"
+
+
+def test_tight_relation_stays_tight():
+    # The space after '\leq' in 'a\leq b' only ends the macro name; keeping
+    # it would give a lopsided 'a≤ b'. The usual LLM style.
+    assert latex_to_unicode("a\\leq b") == "a≤b"
+    assert latex_to_unicode("\\forall x\\in A") == "∀x∈A"
+    assert latex_to_unicode("x\\to 0") == "x→0"
+
+
+def test_word_operator_before_norm():
+    assert latex_to_unicode("\\ln \\|x\\|") == "ln ‖x‖"

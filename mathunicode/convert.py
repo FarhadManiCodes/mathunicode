@@ -129,9 +129,11 @@ _SPACED_MACRO = re.compile(
     # A word operator before a letter, digit or macro -- '\sin x', '\log \alpha'
     # but not '\exp (x)' or '\sin \left(', where the space is OCR noise.
     rf"\\(?:{'|'.join(_WORD_OPERATORS.split())})"
-    r"(?=\s+(?:[A-Za-z0-9]|\\(?!left|right|[bB]igg?[lr]?\b)[A-Za-z]))"
-    # A relation before anything but a script marker or closing brace.
-    rf"|\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
+    r"(?=\s+(?:[A-Za-z0-9]|\\\||\\(?!left|right|[bB]igg?[lr]?\b)[A-Za-z]))"
+    # A relation spaced on both sides, before anything but a script marker or
+    # closing brace. A tight 'a\leq b' stays 'a≤b': the space after '\leq'
+    # there only ends the macro name.
+    rf"|(?:(?<=\s)|^)\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
 )
 
 
