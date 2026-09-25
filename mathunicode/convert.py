@@ -26,6 +26,7 @@ from collections import defaultdict, deque
 
 from pylatexenc import latexwalker, macrospec
 from pylatexenc.latex2text import (
+    EnvironmentTextSpec,
     LatexNodes2Text,
     MacroTextSpec,
     get_default_latex_context_db,
@@ -141,6 +142,83 @@ def _tolerant_templates(db, overridden: tuple[str, ...]) -> list[MacroTextSpec]:
     return list(specs.values())
 
 
+# Multi-row environments, in one linear notation: rows joined by '; '. A true
+# 2-D layout would need a box-layout typesetter to compose the rows with the
+# math around them ('f(x) = \\begin{cases}...'); rows as separate output lines
+# instead come out misaligned, so every construct stays on one line and
+# composes like any other text. pylatexenc's own matrix format ('[ a b; c d ]'
+# for every kind) loses which delimiters were used, and it has none at all
+# for cases/aligned.
+_ROW_BREAK_MACROS = ("\\", "newline", "cr", "tabularnewline")
+_MATRIX_DELIMITERS = {
+    "matrix": ("", ""), "smallmatrix": ("", ""), "array": ("", ""),
+    "pmatrix": ("(", ")"), "psmallmatrix": ("(", ")"),
+    "bmatrix": ("[", "]"), "bsmallmatrix": ("[", "]"),
+    "Bmatrix": ("{", "}"), "vmatrix": ("|", "|"), "Vmatrix": ("‖", "‖"),
+}
+_CASES_ENVIRONMENTS = ("cases", "dcases", "rcases")
+_ALIGNED_ENVIRONMENTS = (
+    "align", "align*", "aligned", "alignat", "alignat*", "alignedat", "flalign", "flalign*",
+    "gather", "gather*", "gathered", "split", "multline", "multline*", "eqnarray", "eqnarray*",
+)
+
+
+def _grid(node, l2tobj) -> list[list[str]]:
+    """An environment's cells, split on '&' and on row breaks ('\\\\'), each
+    cell converted and trimmed; rows with no content (e.g. after a trailing
+    '\\\\') dropped."""
+    rows: list[list[str]] = []
+    cells: list[str] = []
+    cell_nodes: list = []
+
+    def end_cell() -> None:
+        cells.append(l2tobj.nodelist_to_text(cell_nodes).strip())
+        cell_nodes.clear()
+
+    for n in node.nodelist or []:
+        if n.isNodeType(latexwalker.LatexSpecialsNode) and n.specials_chars == "&":
+            end_cell()
+        elif n.isNodeType(latexwalker.LatexMacroNode) and n.macroname in _ROW_BREAK_MACROS:
+            end_cell()
+            rows.append(cells)
+            cells = []
+        else:
+            cell_nodes.append(n)
+    end_cell()
+    rows.append(cells)
+    return [row for row in rows if any(row)]
+
+
+def _rows_text(node, l2tobj, cell_sep: str) -> str:
+    return "; ".join(cell_sep.join(c for c in row if c) for row in _grid(node, l2tobj))
+
+
+def _matrix(opening: str, closing: str):
+    """'\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}' -> '(1 2; 3 4)'."""
+    return lambda node, l2tobj: f"{opening}{_rows_text(node, l2tobj, ' ')}{closing}"
+
+
+def _cases(node, l2tobj) -> str:
+    """'\\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}' -> '{1, x>0; 0, else}'."""
+    return "{" + _rows_text(node, l2tobj, ", ") + "}"
+
+
+def _aligned(node, l2tobj) -> str:
+    """'\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}' -> 'a = b; c = d': '&'
+    is only an alignment point."""
+    return _rows_text(node, l2tobj, " ")
+
+
+def _row_environments() -> list[EnvironmentTextSpec]:
+    specs = [
+        EnvironmentTextSpec(name, simplify_repl=_matrix(opening, closing))
+        for name, (opening, closing) in _MATRIX_DELIMITERS.items()
+    ]
+    specs += [EnvironmentTextSpec(name, simplify_repl=_cases) for name in _CASES_ENVIRONMENTS]
+    specs += [EnvironmentTextSpec(name, simplify_repl=_aligned) for name in _ALIGNED_ENVIRONMENTS]
+    return specs
+
+
 def _build_context_db():
     db = get_default_latex_context_db()
     wide_accents = [
@@ -212,6 +290,7 @@ def _build_context_db():
                 )
             ),
         ],
+        environments=_row_environments(),
     )
     return db
 
@@ -240,19 +319,26 @@ _TEX_COMMENT = re.compile(r"(?<!(?<!\\)\\)%[^\n]*")
 _SOURCE_NEWLINE = re.compile(r"[ \t]*\r?\n\s*")
 
 
+# '\\left.' / '\\right.' (and sized forms): an invisible delimiter, which
+# pylatexenc prints as '.'.
+_NULL_DELIMITER = re.compile(r"\\(?:left|right|[bB]igg?[lr]?)\s*\.")
+
+
 def _join_source_lines(tex: str) -> str:
     """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
     come from '\\\\', never from source line breaks, so the source is joined
     onto one line -- comments first, or joining would let a comment swallow
     the lines after it (pylatexenc drops comments anyway)."""
-    return _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
+    tex = _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
+    return _NULL_DELIMITER.sub("", tex)
 
 
-def _tidy_rows(text: str) -> str:
-    """pylatexenc's output, one row per line (rows come only from '\\\\' now),
-    each row trimmed and empty rows -- from a leading or trailing '\\\\' --
-    dropped."""
-    return "\n".join(row for row in (r.strip() for r in text.split("\n")) if row)
+def _join_rows(text: str) -> str:
+    """pylatexenc's output has a line break for each '\\\\' outside a row
+    environment (top level, \\substack); those rows are trimmed and joined
+    with '; ' like an environment's, and empty ones -- from a leading or
+    trailing '\\\\' -- dropped. The result is always one line."""
+    return "; ".join(row for row in (r.strip() for r in text.split("\n")) if row)
 
 
 def _normalize_math_spacing(tex: str) -> str:
@@ -466,7 +552,7 @@ def _convert(tex: str) -> str:
     # temporarily overwrites its own strict_latex_spaces, so concurrent calls
     # on one instance can leave it permanently wrong.
     converter = LatexNodes2Text(latex_context=_CONTEXT_DB)
-    return _tidy_rows(converter.latex_to_text(tex, latex_context=_PARSE_DB))
+    return _join_rows(converter.latex_to_text(tex, latex_context=_PARSE_DB))
 
 
 # Math spans, tried in order at each position. '\x01' is excluded from span

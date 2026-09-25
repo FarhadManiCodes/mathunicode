@@ -606,7 +606,7 @@ def test_no_doubled_space_around_spacing_macros():
     assert latex_to_unicode("\\int f(x) \\, d x") == "∫f(x) d x"
     assert latex_to_unicode("a \\; b") == "a b"
     # '\\,' is a line break followed by a comma, not a thin space.
-    assert latex_to_unicode("a\\\\, b") == "a\n, b"
+    assert latex_to_unicode("a\\\\, b") == "a; , b"
 
 
 def test_colon_at_end_has_no_trailing_space():
@@ -691,8 +691,8 @@ def test_comment_does_not_swallow_the_next_line():
     assert latex_to_unicode("50\\%") == "50%"
 
 
-def test_rows_come_only_from_line_break_macro():
-    assert latex_to_unicode("a \\\\ b") == "a\nb"
+def test_rows_are_joined_on_one_line():
+    assert latex_to_unicode("a \\\\ b") == "a; b"
     # A leading or trailing '\\' makes no empty row.
     assert latex_to_unicode("\\\\ x \\\\") == "x"
     assert latex_to_unicode("\\quad x") == "x"
@@ -700,3 +700,30 @@ def test_rows_come_only_from_line_break_macro():
 
 def test_convert_math_spans_multiline_display_source():
     assert convert_math_spans("t\n$$\na +\nb\n$$\nu") == "t\na + b\nu"
+
+
+# ---------------------------------------------------------------------------
+# Multi-row environments: one linear notation, composing with the math around
+# ---------------------------------------------------------------------------
+
+
+def test_matrices_keep_their_delimiters():
+    assert latex_to_unicode("A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix} x") == "A = (1 2; 3 4) x"
+    assert latex_to_unicode("\\begin{bmatrix} x_{1} \\\\ x_{2} \\end{bmatrix}") == "[x₁; x₂]"
+    # Determinant bars were lost, and the rows split across output lines.
+    assert latex_to_unicode("\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc") == "det |a b; c d| = ad - bc"
+
+
+def test_cases_and_aligned_compose_with_surrounding_math():
+    # The second row used to start a new output line at column 0.
+    text = "f(x) = \\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}"
+    assert latex_to_unicode(text) == "f(x) = {1, x>0; 0, else}"
+    assert latex_to_unicode("\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}") == "a = b; c = d"
+    assert latex_to_unicode("\\sum_{\\substack{i<n \\\\ j<m}} x_{ij}") == "∑_i<n; j<m xᵢⱼ"
+
+
+def test_array_has_no_invented_brackets_and_null_delimiters_vanish():
+    # OCR output uses array for multi-line equations; pylatexenc wrapped each
+    # in '[ ]' and printed '\right.' as '.'.
+    assert latex_to_unicode("\\begin{array}{l} x = 1 \\\\ y = 2 \\\\ \\end{array}") == "x = 1; y = 2"
+    assert latex_to_unicode("\\left. x \\right|") == "x |"
