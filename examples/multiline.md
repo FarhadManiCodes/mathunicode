@@ -15,7 +15,7 @@ form instead, and composes with the math around it.
 - Cases, comma before `&`: $|x| = \begin{cases} x, & x \ge 0 \\ -x, & x < 0 \end{cases}$ <!-- expect: |x| = {x, x ≥ 0; −x, x < 0 -->
 - Cases as OCR writes them: $\left\{ \begin{array}{ll} 1 & x > 0 \\ 0 & \text{else} \end{array} \right.$ <!-- expect: {1, x > 0; 0, else -->
 - Matrix: $A = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ <!-- expect: A = (1, 2; 3, 4) -->
-- Determinant: $\det \begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc$ <!-- expect: det |a, b; c, d| = ad − bc -->
+- Determinant: $\det \begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc$ <!-- expect: det|a, b; c, d| = ad − bc -->
 - Column vector: $\mathbf{x} = \begin{bmatrix} x_{1} \\ x_{2} \\ x_{3} \end{bmatrix}$ <!-- expect: 𝐱 = [x₁; x₂; x₃] -->
 - Aligned: $\begin{aligned} a &= b + c \\ d &= e - f \end{aligned}$ <!-- expect: a = b + c; d = e − f -->
 - OCR array of equations: $\begin{array}{l} u_{t} + u u_{x} = 0 \\ u(0, x) = -\sin(\pi x) \end{array}$ <!-- expect: uₜ + uuₓ = 0; u(0, x) = −sin(πx) -->
@@ -34,7 +34,8 @@ visible (`x^i_j` would read as x^i with a subscript j).
 - Product dimension: $\mathbb{R}^{n \times m}$ <!-- expect: ℝ^(n × m) -->
 - Representable, OCR-spaced: $x^{n + 1}$ <!-- expect: xⁿ⁺¹ -->
 - Symbols with their own character: $A^{T}$, $f^{\prime}$, $90^{\circ}$ <!-- expect: Aᵀ / f′ / 90° -->
-- One token, left as is: $u_{phy}$ and $\min_{\mathbf{x}} f$ <!-- expect: u_phy / min_𝐱 f -->
+- Several letters are a product, grouped; a word in \text is one token: $u_{phy}$ and $u_{\text{phy}}$ <!-- expect: u_(phy) / u_phy -->
+- One token, left as is: $\min_{\mathbf{x}} f$ <!-- expect: min_𝐱 f -->
 - OCR-spaced math font: $\mathrm{a r g m i n}_{x} f(x)$ <!-- expect: argminₓ f(x) -->
 
 ## Multi-line source

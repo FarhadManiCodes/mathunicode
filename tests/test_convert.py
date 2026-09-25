@@ -14,10 +14,12 @@ def _table(cases: dict[str, str]):
     "x_{i}": "xᵢ", "x^2": "x²", "10^{-3}": "10⁻³", "\\sum_{i=1}^{n} x_i^2": "∑ᵢ₌₁ⁿ xᵢ²",
     "x^{n + 1}": "xⁿ⁺¹", "A^{T} x": "Aᵀx", "f^{\\prime}(x)": "f′(x)", "90^{\\circ}": "90°",
     # otherwise: one token as is, more than one parenthesized
-    "u_{phy}": "u_phy", "\\mathbf{u}_{syn}": "𝐮_syn", "x^{i_j}": "x^(iⱼ)", "e^{-x^2}": "e^(−x²)",
+    "u_{phy}": "u_(phy)", "x_{\\text{phy}}": "x_phy", "\\mathbf{u}_{syn}": "𝐮_(syn)", "x^{i_j}": "x^(iⱼ)",
+    "e^{-x^2}": "e^(−x²)",
     "e^{-i\\omega t}": "e^(−iωt)", "\\min_{\\Theta, \\Lambda} f": "min_(Θ, Λ) f", "a^{b^c}": "a^(bᶜ)",
     "\\mathbb{R}^{n \\times m}": "ℝ^(n × m)", "\\lim_{n \\to \\infty} a_n": "lim_(n → ∞) aₙ",
-    "\\underbrace{a+b}_{n}": "(a + b)ₙ",
+    "\\underbrace{a+b}_{n}": "(a + b)ₙ", "e^{\\gamma t} F(t)": "e^(γt)F(t)", "{i_j}^2": "iⱼ²",
+    "\\left.\\frac{df}{dx}\\right|_{x=0}": "df/dx|ₓ₌₀", "x^{|a|+|b|}": "x^(|a| + |b|)",
 })
 def test_scripts(tex, expected):
     assert latex_to_unicode(tex) == expected
@@ -25,6 +27,7 @@ def test_scripts(tex, expected):
 
 @_table({
     "\\frac{a+b}{c}": "(a + b)/c", "\\sqrt{x^2+1}": "√(x² + 1)", "\\frac{1}{2}": "1/2",
+    "\\frac{\\partial g}{\\partial x}": "∂g/∂x", "\\sqrt[3]{x}": "³√x",
     "\\binom{n}{k}": "(n; k)", "\\hat{x}_1": "x̂₁", "\\overline{AB}": "A̅B̅", "\\dot{x}(t)": "ẋ(t)",
 })
 def test_fractions_roots_accents(tex, expected):
@@ -49,8 +52,11 @@ def test_rows(tex, expected):
     "a \\to b": "a → b", "a\\leq b": "a ≤ b", "x \\in [0, 1]": "x ∈ [0, 1]", "-x + y": "−x + y",
     "\\det(A) = 0": "det(A) = 0", "\\sin x + \\cos y": "sin x + cos y", "2 \\sin x": "2 sin x",
     "\\operatorname{tr}(A)": "tr(A)", "\\|x\\|^2": "‖x‖²", "|a| + |b|": "|a| + |b|",
-    "\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc": "det |a, b; c, d| = ad − bc",
+    "\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc": "det|a, b; c, d| = ad − bc",
     "\\int_0^1 f(x)\\,dx": "∫₀¹ f(x) dx", "\\mathrm{if} x > t": "if x > t",
+    # TeX's atom classes: punctuation, postfix, relation pairs, binary operators whatever the tag
+    "x.": "x.", "n!": "n!", "a := b": "a := b", "a \\pm b": "a ± b", "\\sigma^2/N": "σ²/N",
+    "\\frac1B\\frac1N": "1/B 1/N", "u(0, x) = -\\sin(\\pi x)": "u(0, x) = −sin(πx)", "x \\le -\\gamma": "x ≤ −γ",
 })
 def test_spacing(tex, expected):
     assert latex_to_unicode(tex) == expected
@@ -58,10 +64,11 @@ def test_spacing(tex, expected):
 
 @_table({
     # LaTeX's semantics: source whitespace, comments, fonts; nothing dropped
-    "a +\nb": "a + b", "x % note\n+ y": "x + y", "u_{p h y}": "u_phy",
+    "a +\nb": "a + b", "x % note\n+ y": "x + y", "u_{p h y}": "u_(phy)",
     "\\mathrm{a r g m i n}_x f": "argminₓ f", "\\mathrm{a\\ b}": "a b", "\\foo x": "foo x",
     "\\mathbb{R}": "ℝ", "\\text{is\\_ok}": "is_ok", "50\\%": "50%", "\\left. x \\right|": "x|",
-    "\\boldsymbol{u}_{syn}": "𝒖_syn", "\\boldsymbol{\\theta}": "𝜽", "\\mathbf{x}": "𝐱",
+    "\\boldsymbol{u}_{syn}": "𝒖_(syn)", "\\boldsymbol{\\theta}": "𝜽", "\\mathbf{x}": "𝐱",
+    "\\mathbb {R} ^ {2}": "ℝ²", "\\mathcal {H}": "ℋ", "\\sech x": "sech x",
 })
 def test_latex_semantics(tex, expected):
     assert latex_to_unicode(tex) == expected
@@ -69,7 +76,8 @@ def test_latex_semantics(tex, expected):
 
 @_table({
     "5 and": "$5 and $", "50 to train, compared to": "$50 to train, compared to $",
-    "...": "$...$", "\\left( unbalanced": "\\left( unbalanced", "2 x": "2x",
+    "...": "$...$", "\\left( unbalanced": "(unbalanced", "^{1} ^{2}": "¹²", "2 x": "2x",
+    "x = \\left[ a\n+ b": "x = [a + b",
 })
 def test_prose_and_fallback(tex, expected):
     # currency paired as math comes back with its '$'s; what doesn't parse, as it was

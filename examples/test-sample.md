@@ -11,7 +11,7 @@ file, `multiline.md`.
 - Subscript: $x_{i}$ and bare $x_1$            <!-- expect: xᵢ / x₁ -->
 - Superscript: $\alpha^2$ and $10^6$           <!-- expect: α² / 10⁶ -->
 - Multi-char subscript fully covered: $_{int}$ <!-- expect: ᵢₙₜ -->
-- No subscript form for 'y', stays plain: $u_{phy}$ <!-- expect: u_phy -->
+- No subscript form for 'y', so grouped: $u_{phy}$ <!-- expect: u_(phy) -->
 - Sum with protected macro: $\sum_{i=1}^{n}$   <!-- expect: ∑ᵢ₌₁ⁿ -->
 - Nested script, grouping kept: $x^{i_j}$         <!-- expect: x^(iⱼ) -->
 
