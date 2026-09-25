@@ -1,853 +1,113 @@
-"""Tests for LaTeX -> Unicode conversion. Every case here was found and
-verified live against pylatexenc's actual behavior (not guessed) while
-building this package -- see individual test docstrings for what each one
-caught."""
+"""The rendering rules, one table each: input -> expected output."""
+
+import pytest
+
+from mathunicode import collapse_math_blocks, convert_math_spans, latex_to_unicode
+
+
+def _table(cases: dict[str, str]):
+    return pytest.mark.parametrize(("tex", "expected"), list(cases.items()), ids=list(cases))
+
+
+@_table({
+    # Unicode sub/superscripts when every character has one
+    "x_{i}": "xᵢ", "x^2": "x²", "10^{-3}": "10⁻³", "\\sum_{i=1}^{n} x_i^2": "∑ᵢ₌₁ⁿ xᵢ²",
+    "x^{n + 1}": "xⁿ⁺¹", "A^{T} x": "Aᵀx", "f^{\\prime}(x)": "f′(x)", "90^{\\circ}": "90°",
+    # otherwise: one token as is, more than one parenthesized
+    "u_{phy}": "u_phy", "\\mathbf{u}_{syn}": "𝐮_syn", "x^{i_j}": "x^(iⱼ)", "e^{-x^2}": "e^(−x²)",
+    "e^{-i\\omega t}": "e^(−iωt)", "\\min_{\\Theta, \\Lambda} f": "min_(Θ, Λ) f", "a^{b^c}": "a^(bᶜ)",
+    "\\mathbb{R}^{n \\times m}": "ℝ^(n × m)", "\\lim_{n \\to \\infty} a_n": "lim_(n → ∞) aₙ",
+    "\\underbrace{a+b}_{n}": "(a + b)ₙ",
+})
+def test_scripts(tex, expected):
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    "\\frac{a+b}{c}": "(a + b)/c", "\\sqrt{x^2+1}": "√(x² + 1)", "\\frac{1}{2}": "1/2",
+    "\\binom{n}{k}": "(n; k)", "\\hat{x}_1": "x̂₁", "\\overline{AB}": "A̅B̅", "\\dot{x}(t)": "ẋ(t)",
+})
+def test_fractions_roots_accents(tex, expected):
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    # rows joined by '; ', cells by ', ' -- one line whatever surrounds them
+    "A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}": "A = (1, 2; 3, 4)",
+    "f(x) = \\begin{cases} 1 & x > 0 \\\\ 0 & \\text{else} \\end{cases}": "f(x) = {1, x > 0; 0, else",
+    "\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}": "a = b; c = d",
+    "\\sum_{\\substack{i<j \\\\ k}} x": "∑_(i < j; k) x",
+    "\\left\\{ \\begin{array}{ll} 1 & x > 0 \\\\ 0 & \\text{else} \\end{array} \\right.": "{1, x > 0; 0, else",
+    "a \\\\ b": "a; b",
+})
+def test_rows(tex, expected):
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    # infix operators spaced, prefix and fences tight, words spaced
+    "a \\to b": "a → b", "a\\leq b": "a ≤ b", "x \\in [0, 1]": "x ∈ [0, 1]", "-x + y": "−x + y",
+    "\\det(A) = 0": "det(A) = 0", "\\sin x + \\cos y": "sin x + cos y", "2 \\sin x": "2 sin x",
+    "\\operatorname{tr}(A)": "tr(A)", "\\|x\\|^2": "‖x‖²", "|a| + |b|": "|a| + |b|",
+    "\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc": "det |a, b; c, d| = ad − bc",
+    "\\int_0^1 f(x)\\,dx": "∫₀¹ f(x) dx", "\\mathrm{if} x > t": "if x > t",
+})
+def test_spacing(tex, expected):
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    # LaTeX's semantics: source whitespace, comments, fonts; nothing dropped
+    "a +\nb": "a + b", "x % note\n+ y": "x + y", "u_{p h y}": "u_phy",
+    "\\mathrm{a r g m i n}_x f": "argminₓ f", "\\mathrm{a\\ b}": "a b", "\\foo x": "foo x",
+    "\\mathbb{R}": "ℝ", "\\text{is\\_ok}": "is_ok", "50\\%": "50%", "\\left. x \\right|": "x|",
+})
+def test_latex_semantics(tex, expected):
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    "5 and": "$5 and $", "50 to train, compared to": "$50 to train, compared to $",
+    "...": "$...$", "\\left( unbalanced": "\\left( unbalanced", "2 x": "2x",
+})
+def test_prose_and_fallback(tex, expected):
+    # currency paired as math comes back with its '$'s; what doesn't parse, as it was
+    assert latex_to_unicode(tex) == expected
+
+
+@_table({
+    "pay $5 or $6": "pay $5 or $6", "costs $5-$10": "costs $5-$10", "pay $5 or $x$ now": "pay $5 or x now",
+    "The $ sign is used a lot, $x$": "The $ sign is used a lot, x", "0.20$\\pm$0.26": "0.20±0.26",
+    "an $ r $ -dim": "an r -dim", "$(K - 1) $ -stage": "(K − 1) -stage", "a $ $ b": "a $ $ b",
+    r"cost is \$5 and \$10": r"cost is \$5 and \$10", "$$ \\alpha $$": "α",
+    "see `$HOME` and $x$": "see `$HOME` and x", "```ls $HOME``` then $x^2$": "```ls $HOME``` then x²",
+    "```\n$a$\n```\n$b^2$": "```\n$a$\n```\nb²",
+    "1. ```bash\n   echo $A\n   ```\n$b_1$": "1. ```bash\n   echo $A\n   ```\nb₁",
+    "```\r\n$a$\r\n```\r\nthen $x^2$\r\n": "```\r\n$a$\r\n```\r\nthen x²\r\n",
+    "## Inline ($...$) and ($$ ... $$), $x_1$": "## Inline ($...$) and ($$ ... $$), x₁",
+    "t\n$$\na +\nb\n$$\nu": "t\na + b\nu", "\x010\x01 and $x$": "\x010\x01 and x",
+})
+def test_convert_math_spans(tex, expected):
+    assert convert_math_spans(tex) == expected
+
+
+@_table({
+    "before\n$$\nx_i\n$$\nafter": "before\n$$ x_i $$\nafter",
+    "$$\nline one\nline two\n$$": "$$ line one line two $$", "$$\na\n\nb\n$$": "$$ a b $$",
+    "- item\n  $$\n  x\n  $$\n": "- item\n  $$ x $$\n", "a\r\n$$\r\nx\r\n$$\r\nb\r\n": "a\r\n$$ x $$\r\nb\r\n",
+    "$$\n$$\nprose line\n$$\nmore": "$$\n$$\nprose line\n$$\nmore",  # empty block: no mispairing
+    "$$\nx % c\n+ y\n$$": "$$\nx % c\n+ y\n$$", "$$\n50\\%\n$$": "$$ 50\\% $$",
+    "```\n$$\nx\n$$\n```\n$$\ny\n$$": "```\n$$\nx\n$$\n```\n$$ y $$", "$$\na\n```\n$$\n```": "$$\na\n```\n$$\n```",
+    "$$\nunclosed": "$$\nunclosed", "$$ x $$": "$$ x $$",
+})
+def test_collapse_math_blocks(tex, expected):
+    assert collapse_math_blocks(tex) == expected
 
-from mathunicode.convert import (
-    _looks_like_prose,
-    _normalize_math_spacing,
-    _unicode_scripts,
-    collapse_math_blocks,
-    convert_math_spans,
-    latex_to_unicode,
-)
 
-# ---------------------------------------------------------------------------
-# _normalize_math_spacing -- undoing OCR tools' inconsistent spacing
-# ---------------------------------------------------------------------------
-
-
-def test_normalize_strips_space_around_underscore_and_caret():
-    assert _normalize_math_spacing("x _ {i}") == "x_{i}"
-    assert _normalize_math_spacing("x ^ {2}") == "x^{2}"
-
-
-def test_normalize_collapses_letter_spacing_inside_group_only():
-    # 'u _ {p h y}' -> 'u_{phy}': OCR sometimes inserts spaces *between*
-    # letters of a multi-character subscript, not just around the marker.
-    assert _normalize_math_spacing("u _ {p h y}") == "u_{phy}"
-
-
-def test_normalize_does_not_touch_body_text_spacing():
-    # Letter-spacing collapse is scoped to _{...}/^{...} groups only --
-    # 'a b' in body text could be intentional (implicit multiplication).
-    assert _normalize_math_spacing("a b _ {i}") == "a b_{i}"
-
-
-# ---------------------------------------------------------------------------
-# _unicode_scripts -- real Unicode subscript/superscript substitution
-# ---------------------------------------------------------------------------
-
-
-def test_unicode_scripts_single_char_braced():
-    assert _unicode_scripts("x_{i}") == "xᵢ"
-    assert _unicode_scripts("x^{2}") == "x²"
-
-
-def test_unicode_scripts_bare_no_braces():
-    assert _unicode_scripts("x_1") == "x₁"
-    assert _unicode_scripts("x^2") == "x²"
-
-
-def test_unicode_scripts_multi_char_fully_covered():
-    # i, n, t are all in the subscript map -- full conversion, not partial.
-    assert _unicode_scripts("_{int}") == "ᵢₙₜ"
-
-
-def test_unicode_scripts_no_partial_conversion():
-    # 'y' has no Unicode subscript form -- must stay as literal text
-    # entirely, never a mix like 'ₚhy'.
-    assert _unicode_scripts("u_{phy}") == "u_{phy}"
-    assert _unicode_scripts("u_{syn}") == "u_{syn}"
-
-
-def test_unicode_scripts_uppercase_never_convertible():
-    assert _unicode_scripts("X_{ABC}") == "X_{ABC}"
-
-
-def test_unicode_scripts_skips_macro_content():
-    # Content containing a backslash needs pylatexenc's own macro expansion
-    # first (and Greek letters have no Unicode subscript forms anyway).
-    assert _unicode_scripts("L_{\\Theta}") == "L_{\\Theta}"
-
-
-def test_unicode_scripts_operators_in_group():
-    assert _unicode_scripts("x_{i+1}") == "xᵢ₊₁"
-    assert _unicode_scripts("z^{(k+1)}") == "z⁽ᵏ⁺¹⁾"
-
-
-def test_unicode_scripts_protects_macro_name_tokenization():
-    # Regression: substituting Unicode chars directly after a bare macro
-    # name with no separator (e.g. '\\sum_{i=1}' -> '\\sumᵢ₌₁') glues onto
-    # the name -- pylatexenc then reads '\\sumᵢ₌₁' as one unknown macro and
-    # silently drops \\sum entirely. A protecting space must be inserted.
-    result = _unicode_scripts("\\sum_{i=1}^{n}")
-    assert result.startswith("\\sum ")
-    assert "ᵢ₌₁" in result
-    assert result.endswith("ⁿ")
-
-
-def test_unicode_scripts_no_protecting_space_for_plain_letter_base():
-    # Only a *macro name* prefix needs the protecting space; an ordinary
-    # letter base (not preceded by a backslash) must stay tight, since that
-    # is the overwhelmingly common case (x_1 -> x₁, not x _1 -> "x ₁").
-    assert _unicode_scripts("x_{1}") == "x₁"
-    assert " " not in _unicode_scripts("x_{1}")
-
-
-def test_unicode_scripts_macro_expands_correctly_after_protection():
-    # The protecting space must not prevent pylatexenc from still expanding
-    # the macro correctly downstream -- verified end-to-end via
-    # latex_to_unicode, not just _unicode_scripts in isolation.
-    assert latex_to_unicode("\\Theta_{i}") == "Θᵢ"
-    assert latex_to_unicode("\\sum_{i=1}^{n}") == "∑ᵢ₌₁ⁿ"
-
-
-# ---------------------------------------------------------------------------
-# _looks_like_prose -- guarding against $...$ false positives
-# ---------------------------------------------------------------------------
-
-
-def test_looks_like_prose_detects_multiword_text():
-    assert _looks_like_prose("50 to train, compared to") is True
-    assert _looks_like_prose("profit equals revenue minus cost") is True
-
-
-def test_looks_like_prose_false_for_real_math():
-    assert _looks_like_prose("x_i") is False
-    assert _looks_like_prose("u_{phy}") is False
-    assert _looks_like_prose("y = x + 1") is False
-    assert _looks_like_prose("a + b = c") is False
-
-
-def test_looks_like_prose_false_when_macro_present():
-    assert _looks_like_prose("\\det(A) = 0") is False
-
-
-# ---------------------------------------------------------------------------
-# latex_to_unicode -- the full pipeline, plus the macro fixes found by
-# testing every macro used across a real paper library (149 unique names)
-# ---------------------------------------------------------------------------
-
-
-def test_latex_to_unicode_previously_dropped_macros():
-    # pylatexenc's defaults silently dropped or mishandled these -- not
-    # cosmetically, but as real content loss.
-    assert latex_to_unicode("\\| x \\|^2") == "‖ x ‖²"
-    assert "‖" in latex_to_unicode(
-        "\\| \\boldsymbol{u}_{syn}(x) - \\boldsymbol{u}_{phy}(x) \\|^2"
-    )
-    assert latex_to_unicode("\\det(A) = 0") == "det(A) = 0"
-    assert latex_to_unicode("\\cot(x) + \\csc(x)") == "cot(x) + csc(x)"
-    assert latex_to_unicode("\\Pr(X > 0)") == "Pr(X > 0)"
-    assert latex_to_unicode("a^{\\circledR}") == "a^®"
-    assert latex_to_unicode("p \\land q") == "p ∧ q"
-    assert ":=" in latex_to_unicode("\\coloneqq")
-
-
-def test_latex_to_unicode_ocr_spacing_artifacts():
-    assert latex_to_unicode("x _ {i}") == "xᵢ"
-    assert latex_to_unicode("u _ {p h y}") == "u_phy"
-    assert latex_to_unicode("\\mathsf {L} _ {p h y} (\\Lambda)") == "𝖫_phy (Λ)"
-
-
-def test_latex_to_unicode_prose_guard_restores_dollar_signs():
-    # Called the way convert_math_spans would, with $ already stripped --
-    # must come back with $ signs restored, not just left plain.
-    assert latex_to_unicode("50 to train, compared to") == "$50 to train, compared to $"
-
-
-def test_latex_to_unicode_never_raises_on_malformed_input():
-    # Falls back to the original text rather than raising, so one bad
-    # expression never breaks a larger document being converted.
-    result = latex_to_unicode("\\left( unbalanced")
-    assert isinstance(result, str)
-
-
-# ---------------------------------------------------------------------------
-# convert_math_spans -- finding $...$/$$...$$ spans in a larger text
-# ---------------------------------------------------------------------------
-
-
-def test_convert_math_spans_inline_and_display():
-    text = "The loss is $$ x_{i} $$ and inline $y^2$ here."
-    result = convert_math_spans(text)
-    assert "xᵢ" in result
-    assert "y²" in result
-
-
-def test_convert_math_spans_currency_false_positive_restored_verbatim():
-    text = "The model costs $50 to train, compared to $100 for the baseline."
-    assert convert_math_spans(text) == text
-
-
-def test_convert_math_spans_inline_does_not_cross_paragraph_break():
-    # Real inline math never spans a paragraph break; $...$ matching must
-    # stay on one line so it can't accidentally pair a $ on one line with
-    # an unrelated $ later in the document.
-    text = "Price is $5 on line one.\nAnother $ amount on line two."
-    result = convert_math_spans(text)
-    assert result == text
-
-
-def test_convert_math_spans_display_can_span_multiple_lines():
-    text = "before\n$$\nx_{i}\n$$\nafter"
-    result = convert_math_spans(text)
-    assert "xᵢ" in result
-
-
-def test_convert_math_spans_escaped_dollars_not_a_span():
-    # '\$' is the Markdown escape for a literal dollar. The backslash it
-    # introduces used to defeat the prose guard (which treats any backslash as
-    # "real math"), so escaped currency got paired into a span and mangled.
-    text = r"cost is \$5 and \$10 dollars"
-    assert convert_math_spans(text) == text
-
-
-def test_convert_math_spans_display_prose_restores_double_dollar():
-    # A false positive inside a $$...$$ display block must come back as
-    # $$...$$, not silently downgraded to a single-$ inline span.
-    text = "$$ the quick brown fox jumps $$"
-    assert convert_math_spans(text) == text
-
-
-def test_nested_script_group_is_converted_inside_and_parenthesized():
-    # 'x^{i_j}' used to print 'x^i_j', which reads as x^i with a subscript j.
-    # The inner script is converted and the group parenthesized, so the
-    # grouping is explicit.
-    assert _unicode_scripts("x^{i_j}") == "x^{(iⱼ)}"
-    assert latex_to_unicode("x^{i_j}") == "x^(iⱼ)"
-    assert latex_to_unicode("L_{a\\Theta}") == "L_(aΘ)"
-
-
-# ---------------------------------------------------------------------------
-# collapse_math_blocks -- fixing render-markdown.nvim's concealment gap
-# ---------------------------------------------------------------------------
-
-
-def test_collapse_math_blocks_basic():
-    text = "before\n$$\n\\Pr[x_1] = F(x)\n$$\nafter"
-    assert collapse_math_blocks(text) == "before\n$$ \\Pr[x_1] = F(x) $$\nafter"
-
-
-def test_collapse_math_blocks_leaves_single_line_untouched():
-    text = "before\n$$ x_i^2 $$\nafter"
-    assert collapse_math_blocks(text) == text
-
-
-def test_collapse_math_blocks_multiple_content_lines_joined():
-    text = "$$\nline one\nline two\n$$"
-    assert collapse_math_blocks(text) == "$$ line one line two $$"
-
-
-def test_collapse_math_blocks_multiple_blocks_in_one_document():
-    text = "$$\na\n$$\ntext between\n$$\nb\n$$"
-    assert collapse_math_blocks(text) == "$$ a $$\ntext between\n$$ b $$"
-
-
-def test_collapse_math_blocks_no_matching_close_left_untouched():
-    text = "$$\nunclosed content"
-    assert collapse_math_blocks(text) == text
-
-
-def test_latex_to_unicode_is_thread_safe():
-    # pylatexenc's LatexNodes2Text temporarily overwrites its own settings
-    # inside math nodes like '\(...\)'; a converter shared across threads got
-    # permanently corrupted by interleaved save/restore.
-    import sys
-    import threading
-
-    inputs = ["\\alpha \\beta x \\(\\gamma  y\\) \\sum z", "a \\det c", "\\[ \\alpha  x \\] \\cot y"]
-    expected = {s: latex_to_unicode(s) for s in inputs}
-    mismatches = []
-
-    def work(k):
-        for i in range(300):
-            s = inputs[(i + k) % len(inputs)]
-            if latex_to_unicode(s) != expected[s]:
-                mismatches.append(s)
-
-    old_interval = sys.getswitchinterval()
-    sys.setswitchinterval(1e-6)
-    try:
-        threads = [threading.Thread(target=work, args=(k,)) for k in range(6)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-    finally:
-        sys.setswitchinterval(old_interval)
-    assert not mismatches
-    assert {s: latex_to_unicode(s) for s in inputs} == expected
-
-# ---------------------------------------------------------------------------
-# Escaped '\_' and the accent macro '\^' are not script markers
-# ---------------------------------------------------------------------------
-
-
-def test_accent_macro_circumflex_not_treated_as_superscript():
-    # '\^{o}' used to become '\ᵒ' -- an unknown macro pylatexenc drops.
-    assert latex_to_unicode("\\^{o}") == "ô"
-    assert latex_to_unicode("\\^o") == "ô"
-
-
-def test_escaped_underscore_not_treated_as_subscript():
-    assert latex_to_unicode("a\\_1") == "a_1"
-    assert _normalize_math_spacing("a \\_ b") == "a \\_ b"
-
-
-def test_line_break_before_subscript_still_converts():
-    # '\\_1' is a line break followed by a real subscript, not an escape.
-    assert _unicode_scripts("a\\\\_1") == "a\\\\₁"
-
-
-def test_control_space_before_marker_is_kept():
-    # Stripping the space of '\ ' would turn it into the escape '\_'.
-    assert _normalize_math_spacing("x\\ _1") == "x\\ _1"
-    assert latex_to_unicode("x\\ _1") == "x ₁"
-
-
-# ---------------------------------------------------------------------------
-# Fallback on conversion failure
-# ---------------------------------------------------------------------------
-
-
-class _FailingConverter:
-    def __init__(self, **kwargs):
-        pass
-
-    def latex_to_text(self, tex, **kwargs):
-        raise ValueError("boom")
-
-
-def test_latex_to_unicode_fallback_returns_original_input(monkeypatch):
-    # Not the half-processed text ('xᵢ') -- the input exactly as given.
-    monkeypatch.setattr("mathunicode.convert.LatexNodes2Text", _FailingConverter)
-    assert latex_to_unicode("x _ {i}") == "x _ {i}"
-
-
-def test_convert_math_spans_fallback_keeps_span_verbatim(monkeypatch):
-    monkeypatch.setattr("mathunicode.convert.LatexNodes2Text", _FailingConverter)
-    text = "see $x _ {i}$ and $$ y^2 $$ here"
-    assert convert_math_spans(text) == text
-
-
-def test_collapse_math_blocks_empty_block_does_not_mispair():
-    # The empty block's closing '$$' must not become the opener of a new
-    # block that swallows the prose line after it.
-    text = "$$\n$$\nprose line\n$$\nmore"
-    assert collapse_math_blocks(text) == text
-
-
-def test_collapse_math_blocks_keeps_indentation():
-    text = "- item\n  $$\n  x\n  $$\n"
-    assert collapse_math_blocks(text) == "- item\n  $$ x $$\n"
-
-
-def test_collapse_math_blocks_keeps_crlf_line_ending():
-    text = "a\r\n$$\r\nx\r\n$$\r\nb\r\n"
-    assert collapse_math_blocks(text) == "a\r\n$$ x $$\r\nb\r\n"
-
-
-def test_collapse_math_blocks_skips_fenced_code():
-    for fence in ("```", "~~~", "````"):
-        text = f"{fence}\n$$\nx\n$$\n{fence}\n$$\ny\n$$"
-        assert collapse_math_blocks(text) == f"{fence}\n$$\nx\n$$\n{fence}\n$$ y $$"
-
-
-def test_collapse_math_blocks_shorter_fence_does_not_close():
-    text = "````\n```\n$$\nx\n$$\n````"
-    assert collapse_math_blocks(text) == text
-
-
-def test_collapse_math_blocks_drops_blank_content_lines():
-    assert collapse_math_blocks("$$\na\n\nb\n$$") == "$$ a b $$"
-
-
-def test_collapse_math_blocks_leaves_tex_comment_block_untouched():
-    # Joined onto one line, '% c' would comment out '+ y' as well.
-    text = "$$\nx % c\n+ y\n$$"
-    assert collapse_math_blocks(text) == text
-    # An escaped '\%' is a literal percent sign, not a comment.
-    assert collapse_math_blocks("$$\n50\\%\n$$") == "$$ 50\\% $$"
-
-
-def test_latex_to_unicode_more_previously_dropped_macros():
-    # pylatexenc drops all of these entirely.
-    cases = {
-        "\\sec(x)": "sec(x)",
-        "\\coth(x)": "coth(x)",
-        "\\lg(n)": "lg(n)",
-        "\\ker(f)": "ker(f)",
-        "\\dim(V)": "dim(V)",
-        "\\deg(p)": "deg(p)",
-        "\\gcd(a,b)": "gcd(a,b)",
-        "\\hom(A,B)": "hom(A,B)",
-        "(a)\\bmod(n)": "(a)mod(n)",
-        "(p)\\lor(q)": "(p)∨(q)",
-        "\\neg(p)": "¬(p)",
-        "(A)\\iff(B)": "(A)⟺(B)",
-        "(A)\\implies(B)": "(A)⟹(B)",
-        "(A)\\impliedby(B)": "(A)⟸(B)",
-        "x\\gets(1)": "x←(1)",
-    }
-    for tex, expected in cases.items():
-        assert latex_to_unicode(tex) == expected, tex
-
-
-def test_latex_to_unicode_pmod_keeps_its_argument():
-    # Used to give 'a n' -- the 'mod' lost, only the argument left.
-    assert latex_to_unicode("a\\pmod{n}") == "a(mod n)"
-
-
-# ---------------------------------------------------------------------------
-# convert_math_spans -- which '$'s pair up
-# ---------------------------------------------------------------------------
-
-
-def test_convert_math_spans_currency_never_pairs():
-    for text in ("pay $5 or $6", "costs $5-$10", "from $250 to $10,000.", "US $49.99 CAN $52.99"):
-        assert convert_math_spans(text) == text
-
-
-def test_convert_math_spans_rejected_match_does_not_swallow_real_math():
-    # A '$' that doesn't open a span must not eat the opening '$' of a real
-    # span after it.
-    assert convert_math_spans("pay $5 or $x$ now") == "pay $5 or x now"
-    assert convert_math_spans("pay $5 for $x^2$") == "pay $5 for x²"
-    # Nor may a prose-guard rejection eat it.
-    assert convert_math_spans("The $ sign is used a lot, $x$") == "The $ sign is used a lot, x"
-
-
-def test_convert_math_spans_symbol_before_number():
-    # The no-digit-after-closing-'$' rule only applies to bodies that start
-    # with a digit (currency); '$\pm$0.26' is still math.
-    assert convert_math_spans("0.20$\\pm$0.26") == "0.20±0.26"
-    assert convert_math_spans("$\\gg$175B") == "≫175B"
-
-
-def test_convert_math_spans_ocr_padding():
-    # OCR output pads inline spans: '$ r $', and sometimes only one side.
-    assert convert_math_spans("an $ r $ -dimensional") == "an r -dimensional"
-    assert convert_math_spans("$ x _ {i} $ ok") == "xᵢ ok"
-    assert convert_math_spans("$ t\\in[0,1]$ ;") == "t∈[0,1] ;"
-    assert convert_math_spans("$C_{\\alpha}^{*} $ is") == "C_α^* is"
-
-
-def test_convert_math_spans_trailing_pad_needs_latex():
-    # Space only before the closing '$' is accepted only for clear LaTeX;
-    # otherwise it looks just like '$5 or $'.
-    assert convert_math_spans("$^ -o $@") == "$^ -o $@"
-    assert convert_math_spans("$5 for a \\to b $") == "$5 for a \\to b $"
-
-
-def test_convert_math_spans_strips_padding_from_output():
-    assert convert_math_spans("$$ \\alpha $$") == "α"
-    assert convert_math_spans("before\n$$\nx_{i}\n$$\nafter") == "before\nxᵢ\nafter"
-
-
-def test_convert_math_spans_skips_inline_code():
-    assert convert_math_spans("run `echo $HOME and $PATH` now") == "run `echo $HOME and $PATH` now"
-    # The code span's '$' must not pair with the real math opener after it.
-    assert convert_math_spans("see `$HOME` and $x$") == "see `$HOME` and x"
-    assert convert_math_spans("``a ` $x$ ``, $y_1$") == "``a ` $x$ ``, y₁"
-
-
-def test_convert_math_spans_skips_fenced_code():
-    assert convert_math_spans("```\nx = $a$\n```\n$b^2$") == "```\nx = $a$\n```\nb²"
-    # A shorter or different fence inside doesn't close it.
-    assert convert_math_spans("~~~~\n```\n$a$\n~~~~\n$b^2$") == "~~~~\n```\n$a$\n~~~~\nb²"
-    # An unclosed fence runs to the end of the text.
-    assert convert_math_spans("```\n$a$") == "```\n$a$"
-
-
-# ---------------------------------------------------------------------------
-# Spacing after operator names and relations
-# ---------------------------------------------------------------------------
-
-
-def test_space_kept_after_word_operators():
-    # pylatexenc glued these into one word: 'sinx', 'detA', 'cost'.
-    assert latex_to_unicode("\\sin x") == "sin x"
-    assert latex_to_unicode("\\det A") == "det A"
-    assert latex_to_unicode("1 - \\cos t") == "1 - cos t"
-    assert latex_to_unicode("\\log \\alpha") == "log α"
-    assert latex_to_unicode("a \\bmod n") == "a mod n"
-
-
-def test_space_kept_after_relations():
-    assert latex_to_unicode("a \\to b") == "a → b"
-    assert latex_to_unicode("x \\in [0,1]") == "x ∈ [0,1]"
-    assert latex_to_unicode("a \\le b") == "a ≤ b"
-    assert latex_to_unicode("p \\land q") == "p ∧ q"
-    assert latex_to_unicode("x \\coloneqq y") == "x := y"
-    assert latex_to_unicode("\\mathbf {u} \\otimes \\mathbf {u}") == "𝐮 ⊗ 𝐮"
-
-
-def test_other_macros_stay_tight():
-    # Greek letters and other symbols: 'Δt', not 'Δ t'.
-    assert latex_to_unicode("\\Delta t") == "Δt"
-    assert latex_to_unicode("\\alpha x") == "αx"
-    assert latex_to_unicode("\\nabla f") == "∇f"
-    # '\in' must not match inside '\int'.
-    assert latex_to_unicode("\\int x") == "∫x"
-
-
-def test_no_space_added_where_source_has_none():
-    assert latex_to_unicode("\\exp(x)") == "exp(x)"
-    assert latex_to_unicode("\\sin\\theta") == "sinθ"
-    assert latex_to_unicode("\\max_i x_i") == "maxᵢ xᵢ"
-    assert latex_to_unicode("\\sin \\left( x \\right)") == "sin( x )"
-
-
-def test_tight_relation_stays_tight():
-    # The space after '\leq' in 'a\leq b' only ends the macro name; keeping
-    # it would give a lopsided 'a≤ b'. The usual LLM style.
-    assert latex_to_unicode("a\\leq b") == "a≤b"
-    assert latex_to_unicode("\\forall x\\in A") == "∀x∈A"
-    assert latex_to_unicode("x\\to 0") == "x→0"
-
-
-def test_word_operator_before_norm():
-    assert latex_to_unicode("\\ln \\|x\\|") == "ln ‖x‖"
-
-
-def test_colon_macro_not_dropped():
-    # Set like punctuation: no space before, one after.
-    assert latex_to_unicode("f\\colon X\\to Y") == "f: X→Y"
-    assert latex_to_unicode("f \\colon X \\to Y") == "f: X → Y"
-
-
-def test_one_line_triple_backticks_are_a_code_span_not_a_fence():
-    # A backtick fence's info string can't contain backticks, so this is an
-    # inline code span -- treating it as an unclosed fence masked everything
-    # after it.
-    text = "```ls $HOME``` then $x^2$\n\nlater $y_1$"
-    assert convert_math_spans(text) == "```ls $HOME``` then x²\n\nlater y₁"
-    assert collapse_math_blocks("```x```\n$$\na\n$$") == "```x```\n$$ a $$"
-
-
-def test_convert_math_spans_input_containing_mask_sentinel():
-    # '\x01' is the code-mask sentinel; input already holding it used to crash.
-    assert convert_math_spans("\x010\x01 and $x$") == "\x010\x01 and x"
-
-
-def test_convert_math_spans_many_backtick_runs_is_fast():
+def test_no_pathological_slowdown():
     import time
 
-    text = " ".join("`" * k for k in range(1, 400))
     start = time.perf_counter()
-    assert convert_math_spans(text) == text
-    assert time.perf_counter() - start < 1.0
-
-
-def test_fence_inside_list_item_or_blockquote():
-    # LLMs often put fences in numbered lists. Unrecognised, the indented
-    # closer was taken as a new opener and masked everything after it.
-    text = "1. ```bash\n   echo $HOME and $PATH\n   ```\n2. then $x^2$"
-    assert convert_math_spans(text) == "1. ```bash\n   echo $HOME and $PATH\n   ```\n2. then x²"
-    assert convert_math_spans("- ```\n  $a$\n  ```\n$b_1$") == "- ```\n  $a$\n  ```\nb₁"
-    text = "1. ```\n   $$\n   x\n   $$\n   ```\n$$\ny\n$$"
-    assert collapse_math_blocks(text) == "1. ```\n   $$\n   x\n   $$\n   ```\n$$ y $$"
-
-
-def test_relation_after_alignment_or_spacing_macro():
-    assert latex_to_unicode("x &\\leq y") == "x    ≤ y"
-    assert latex_to_unicode("x\\quad\\implies y") == "x  ⟹ y"
-    assert latex_to_unicode("x\\;\\to y") == "x → y"
-
-
-def test_colon_keeps_control_space_before_it():
-    # Stripping the space of '\ ' turned '\ \colon' into '\\colon'.
-    assert "colon" not in latex_to_unicode("x\\ \\colon y")
-
-
-def test_latex_to_unicode_dropped_symbols_batch_two():
-    # Also dropped entirely by pylatexenc; all used in the paper library.
-    cases = {
-        "a \\models b": "a ⊨ b",
-        "\\varSigma": "Σ",
-        "\\varPhi": "Φ",
-        "\\varOmega_i": "Ωᵢ",
-        "\\Box p": "□p",
-        "\\checkmark": "✓",
-        "\\ddagger": "‡",
-        "(a)\\bot(b)": "(a)⊥(b)",
-        "\\llbracket x\\rrbracket": "⟦x⟧",
-        "\\S 3": "§3",
-        "a \\colonequals b": "a := b",
-        "a \\eqqcolon b": "a =: b",
-    }
-    for tex, expected in cases.items():
-        assert latex_to_unicode(tex) == expected, tex
-
-
-def test_wide_accents_keep_their_mark():
-    # pylatexenc dropped the accent: '\overline{x}' -> 'x'.
-    assert latex_to_unicode("\\overline{x}") == "x̅"
-    assert latex_to_unicode("\\overline{AB}") == "A̅B̅"
-    assert latex_to_unicode("\\widetilde{x}") == "x̃"
-    assert latex_to_unicode("\\widehat{\\theta}") == "θ̂"
-
-
-def test_labelled_arrows_and_binomials():
-    # '\xrightarrow{f}' vanished entirely, label and arrow both.
-    assert latex_to_unicode("A \\xrightarrow{f} B") == "A -f→ B"
-    assert latex_to_unicode("A \\xleftarrow{f} B") == "A ←f- B"
-    assert latex_to_unicode("\\xrightarrow{}") == "→"
-    # '\binom{n}{k}' gave 'nk'.
-    assert latex_to_unicode("\\binom{n}{k}") == "C(n,k)"
-    assert latex_to_unicode("\\dbinom nk") == "C(n,k)"
-
-
-def test_no_doubled_space_around_spacing_macros():
-    # Math mode ignores spaces next to '\,' '\;' '\:' '\!'; pylatexenc printed
-    # them as well as the macro's own space.
-    assert latex_to_unicode("x\\,\\to\\, y") == "x → y"
-    assert latex_to_unicode("\\int f(x) \\, d x") == "∫f(x) d x"
-    assert latex_to_unicode("a \\; b") == "a b"
-    # '\\,' is a line break followed by a comma, not a thin space.
-    assert latex_to_unicode("a\\\\, b") == "a; , b"
-
-
-def test_colon_at_end_has_no_trailing_space():
-    assert latex_to_unicode("f\\colon") == "f:"
-    assert latex_to_unicode("f\\colon\\mathbb{R}\\to\\mathbb{R}") == "f: ℝ→ℝ"
-
-
-def test_wide_accent_on_long_argument_stays_plain():
-    # A mark on every character of a long expression is noise.
-    assert latex_to_unicode("\\overline{x+y}") == "x+y"
-    assert latex_to_unicode("\\overline{{u_{1}^{\\prime} c^{\\prime}}}") == "u₁′ c′"
-
-
-def test_argument_macros_tolerate_missing_arguments():
-    # Truncated or OCR-broken input: no '%s' leaking into the output, and no
-    # raw fallback for the whole expression.
-    assert latex_to_unicode("\\binom{n}") == "n"
-    assert latex_to_unicode("a \\pmod") == "a mod"
-    assert latex_to_unicode("x + \\xrightarrow") == "x + →"
-    assert latex_to_unicode("a + \\overline") == "a +"
-
-
-def test_wide_accent_skips_scripted_arguments():
-    # The mark would land on the sub/superscript characters too.
-    assert latex_to_unicode("\\overline{x_1}") == "x₁"
-    assert latex_to_unicode("\\overline{x^2}") == "x²"
-    assert latex_to_unicode("\\overline{\\alpha}") == "α̅"
-
-
-def test_wide_accent_on_greek_and_bold_letters():
-    assert latex_to_unicode("\\overline{\\Delta r}") == "Δ̅r̅"
-    assert latex_to_unicode("\\widehat{\\mathbf{FL}}") == "𝐅̂𝐋̂"
-    assert latex_to_unicode("\\overline{x_i}") == "xᵢ"
-
-
-def test_convert_math_spans_crlf_line_endings():
-    # The fence closer and paragraph breaks must allow '\r'.
-    text = "```\r\n$a$\r\n```\r\nthen $x^2$\r\n"
-    assert convert_math_spans(text) == "```\r\n$a$\r\n```\r\nthen x²\r\n"
-    text = "~~~\r\n$a$\r\n~~~\r\nthen $x^2$\r\n"
-    assert convert_math_spans(text) == "~~~\r\n$a$\r\n~~~\r\nthen x²\r\n"
-    # A code span can't cross a CRLF blank line.
-    assert convert_math_spans("`a\r\n\r\nb` $x_1$ `c") == "`a\r\n\r\nb` $x_1$ `c"
-
-
-def test_default_templates_tolerate_missing_arguments():
-    # pylatexenc's own '%s' templates leaked ('\frac{a}' -> '%s/%sa') or raised
-    # (a bare '\sqrt', so the whole expression came back raw).
-    assert latex_to_unicode("\\frac{a}") == "a"
-    assert latex_to_unicode("x + \\frac") == "x +"
-    assert latex_to_unicode("x + \\sqrt") == "x +"
-    assert latex_to_unicode("\\braket{a}") == "a"
-    # Complete input is filled as before.
-    assert latex_to_unicode("\\frac{a}{b}") == "a/b"
-    assert latex_to_unicode("\\sqrt[3]{x}") == "√(x)"
-    assert latex_to_unicode("\\braket{a}{b}") == "⟨a|b⟩"
-    assert latex_to_unicode("\\footnote{hi}") == "[hi]"
-
-
-def test_collapse_math_blocks_closer_inside_later_fence_does_not_count():
-    # The '$$' inside the fence used to close the block opened above it,
-    # pulling the fence line into the collapsed equation.
-    text = "$$\na\n```\n$$\n```"
-    assert collapse_math_blocks(text) == text
-
-
-# ---------------------------------------------------------------------------
-# Source line breaks vs. rows
-# ---------------------------------------------------------------------------
-
-
-def test_source_newline_is_a_space():
-    # In LaTeX a source line break is only whitespace; it used to come out as
-    # a line break, i.e. a bogus extra row.
-    assert latex_to_unicode("a +\nb") == "a + b"
-    assert latex_to_unicode("x_{i}\n\\le y") == "xᵢ ≤ y"
-    assert latex_to_unicode("a\r\nb") == "a b"
-
-
-def test_comment_does_not_swallow_the_next_line():
-    assert latex_to_unicode("x % note\n+ y") == "x + y"
-    assert latex_to_unicode("50\\%") == "50%"
-
-
-def test_rows_are_joined_on_one_line():
-    assert latex_to_unicode("a \\\\ b") == "a; b"
-    # A leading or trailing '\\' makes no empty row.
-    assert latex_to_unicode("\\\\ x \\\\") == "x"
-    assert latex_to_unicode("\\quad x") == "x"
-
-
-def test_convert_math_spans_multiline_display_source():
-    assert convert_math_spans("t\n$$\na +\nb\n$$\nu") == "t\na + b\nu"
-
-
-# ---------------------------------------------------------------------------
-# Multi-row environments: one linear notation, composing with the math around
-# ---------------------------------------------------------------------------
-
-
-def test_matrices_keep_their_delimiters():
-    assert latex_to_unicode("A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix} x") == "A = (1 2; 3 4) x"
-    assert latex_to_unicode("\\begin{bmatrix} x_{1} \\\\ x_{2} \\end{bmatrix}") == "[x₁; x₂]"
-    # Determinant bars were lost, and the rows split across output lines.
-    assert latex_to_unicode("\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc") == "det |a b; c d| = ad - bc"
-
-
-def test_cases_and_aligned_compose_with_surrounding_math():
-    # The second row used to start a new output line at column 0.
-    text = "f(x) = \\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}"
-    assert latex_to_unicode(text) == "f(x) = {1, x>0; 0, else}"
-    assert latex_to_unicode("\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}") == "a = b; c = d"
-    assert latex_to_unicode("\\sum_{\\substack{i<n \\\\ j<m}} x_{ij}") == "∑_(i<n; j<m) xᵢⱼ"
-
-
-def test_array_has_no_invented_brackets_and_null_delimiters_vanish():
-    # OCR output uses array for multi-line equations; pylatexenc wrapped each
-    # in '[ ]' and printed '\right.' as '.'.
-    assert latex_to_unicode("\\begin{array}{l} x = 1 \\\\ y = 2 \\\\ \\end{array}") == "x = 1; y = 2"
-    assert latex_to_unicode("\\left. x \\right|") == "x |"
-
-
-def test_short_currency_pair_is_prose():
-    # tree-sitter-markdown (render-markdown.nvim) pairs 'costs $5 and $10'
-    # into the "math" '5 and'; the CLI must hand it back with its '$'s.
-    assert latex_to_unicode("5 and") == "$5 and $"
-    assert latex_to_unicode("2 x") == "2 x"
-    assert latex_to_unicode("x_1 and") == "x₁ and"
-
-
-def test_cases_comma_before_ampersand_not_doubled():
-    assert latex_to_unicode("\\begin{cases} x, & a \\\\ y, & b \\end{cases}") == "{x, a; y, b}"
-
-
-def test_alignedat_column_count_not_in_output():
-    assert latex_to_unicode("\\begin{alignedat}{2} a &= b \\\\ e &= f \\end{alignedat}") == "a = b; e = f"
-
-
-def test_optional_position_argument_not_in_output():
-    assert latex_to_unicode("\\begin{aligned}[t] a &= b \\\\ c &= d \\end{aligned}") == "a = b; c = d"
-    assert latex_to_unicode("\\begin{gathered}[b] a \\\\ b \\end{gathered}") == "a; b"
-    assert latex_to_unicode("\\begin{alignedat}[t]{2} a &= b \\end{alignedat}") == "a = b"
-
-
-def test_interval_after_begin_aligned_is_content_not_position():
-    assert latex_to_unicode("\\begin{aligned} [a,b] &= c \\end{aligned}") == "[a,b] = c"
-
-
-def test_letter_gap_collapse_never_glues_a_macro_to_the_next_letter():
-    # '\omega t' became '\omegat', an unknown macro pylatexenc drops: the
-    # 'ωt' vanished (299 spans in the paper library lost content this way).
-    assert latex_to_unicode("e^{-i\\omega t}") == "e^(-iωt)"
-    assert latex_to_unicode("\\mathbb{R}^{d\\times d}") == "ℝ^(d×d)"
-    # OCR letter-spacing is still undone.
-    assert latex_to_unicode("u _ {p h y}") == "u_phy"
-
-
-# ---------------------------------------------------------------------------
-# Script groups: Unicode where every character has a form, parentheses where
-# the group is more than one token, left alone when it's one token
-# ---------------------------------------------------------------------------
-
-
-def test_complex_script_groups_are_parenthesized():
-    cases = {
-        "e^{-x^2}": "e^(-x²)",
-        "\\min_{\\Theta,\\Lambda} f": "min_(Θ,Λ) f",
-        "x_{i,j}": "x_(i,j)",
-        "a^{b^c}": "a^(bᶜ)",
-        "\\psi_{1,0},\\psi_{1/2,0}": "ψ_(1,0),ψ_(1/2,0)",
-        "\\mathbb{R}^{n\\times m}": "ℝ^(n×m)",
-        "x_{i,j}^{2}": "x_(i,j)²",
-        "\\sqrt{e^{-x^2}}": "√(e^(-x²))",
-        "e^{-(x-\\mu)^2}": "e^(-(x-μ)²)",
-    }
-    for tex, expected in cases.items():
-        assert latex_to_unicode(tex) == expected, tex
-
-
-def test_already_parenthesized_group_gets_no_second_pair():
-    assert latex_to_unicode("x^{\\left( k \\right)}") == "x^( k )"
-    assert latex_to_unicode("x^{(k)}") == "x⁽ᵏ⁾"
-
-
-def test_single_token_groups_stay_unwrapped():
-    cases = {
-        "u_{phy}": "u_phy",
-        "L_{\\Theta}": "L_Θ",
-        "\\min_{\\mathbf{x}} f": "min_𝐱 f",
-        "x_{\\text{max}}": "x_max",
-        "x^{*}": "x^*",
-        "x^\\alpha": "x^α",
-    }
-    for tex, expected in cases.items():
-        assert latex_to_unicode(tex) == expected, tex
-
-
-def test_representable_groups_ignore_ocr_spaces():
-    assert latex_to_unicode("x^{n + 1}") == "xⁿ⁺¹"
-    assert latex_to_unicode("\\sum\\limits_{i=1}^{n}") == "∑ᵢ₌₁ⁿ"
-
-
-def test_superscript_symbols_have_their_own_characters():
-    assert latex_to_unicode("A^{T}") == "Aᵀ"
-    assert latex_to_unicode("A^{\\top}") == "Aᵀ"
-    assert latex_to_unicode("f^{\\prime}") == "f′"
-    assert latex_to_unicode("f^{\\prime\\prime}") == "f″"
-    assert latex_to_unicode("90^{\\circ}") == "90°"
-
-
-def test_unbalanced_group_left_as_is():
-    assert latex_to_unicode("x^{") == "x^"
-    assert latex_to_unicode("x_{i") == "x_i"
-
-
-def test_parenthesized_font_argument_gets_no_second_pair():
-    assert latex_to_unicode("x^{\\mathrm{(train)}}") == "x^(train)"
-
-
-def test_dots_only_span_is_syntax_not_math():
-    # '## Inline math ($...$)' rendered as '## Inline math (...)'.
-    assert latex_to_unicode("...") == "$...$"
-    text = "## Inline math ($...$) and ($$ ... $$), then $x_1$"
-    assert convert_math_spans(text) == "## Inline math ($...$) and ($$ ... $$), then x₁"
-    # Operators are real math.
-    assert latex_to_unicode("+") == "+"
-    assert latex_to_unicode("\\ldots") == "…"
-
-
-def test_math_font_argument_ignores_spaces():
-    # OCR spaces out letters inside math fonts; math mode ignores them.
-    assert latex_to_unicode("\\operatorname{V a r}(X)") == "Var(X)"
-    assert latex_to_unicode("\\mathrm{a r g m i n}_x f") == "argminₓ f"
-    assert latex_to_unicode("\\mathbf{\\alpha x}") == "α𝐱"
-    # Text mode keeps its spaces.
-    assert latex_to_unicode("\\text{if } x").split() == ["if", "x"]
-
-
-def test_ocr_array_cases_reads_as_cases():
-    text = "\\left\\{ \\begin{array}{ll} 1 & x > 0 \\\\ 0 & \\text{else} \\end{array} \\right."
-    assert latex_to_unicode(text) == "{1, x > 0; 0, else}"
-    # A set in braces is not cases.
-    assert latex_to_unicode("\\left\\{ \\begin{array}{c} a \\\\ b \\end{array} \\right\\}") == "{ a; b }"
+    convert_math_spans(" ".join("`" * k for k in range(1, 400)))
+    latex_to_unicode("x^{a " * 2000)
+    assert time.perf_counter() - start < 2.0

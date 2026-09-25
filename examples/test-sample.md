@@ -17,7 +17,7 @@ file, `multiline.md`.
 
 ## Macros pylatexenc drops or mishandles
 
-- Norm: $\| x \|^2$                            <!-- expect: ‖ x ‖² -->
+- Norm: $\| x \|^2$                            <!-- expect: ‖x‖² -->
 - Determinant: $\det(A) = 0$                   <!-- expect: det(A) = 0 -->
 - Trig: $\cot(x) + \csc(x)$                    <!-- expect: cot(x) + csc(x) -->
 - Probability: $\Pr(X > 0)$                    <!-- expect: Pr(X > 0) -->
