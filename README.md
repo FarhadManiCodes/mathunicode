@@ -20,12 +20,17 @@ pylatexenc doesn't do on its own:
   layout would need a box-layout typesetter; rows as separate output lines
   misalign as soon as anything surrounds the environment.
 - **Real Unicode subscript/superscript characters** where every character
-  in a `_{...}`/`^{...}` group has one (`x_{i}` -> `xᵢ`, `_{int}` ->
-  `ᵢₙₜ`), falling back to the plain `_word` text pylatexenc would otherwise
-  produce when it isn't fully representable -- Unicode has no subscript
-  glyph for several letters (`b,c,d,f,g,q,w,y,z`), any uppercase letter, or
-  any Greek letter, so `u_{phy}` (missing `y`) stays as `u_phy`, never a
-  partial conversion like `ᵤ_phy`.
+  in a `_{...}`/`^{...}` group has one (`x_{i}` -> `xᵢ`, `x^{n + 1}` ->
+  `xⁿ⁺¹`, `A^{T}` -> `Aᵀ`, `f^{\prime}` -> `f′`). Unicode has none for
+  several letters (subscript `b,c,d,f,g,q,w,y,z` and every capital;
+  superscript `C,F,Q,S,X,Y,Z`) or any Greek letter, and there's never a
+  partial conversion. A group that can't be converted keeps its grouping
+  visible: one token stays as is (`u_{phy}` -> `u_phy`), more than one is
+  parenthesized, as plain-text math writes it (`x^{i_j}` -> `x^(iⱼ)`,
+  `e^{-x^2}` -> `e^(-x²)`, `\min_{\Theta,\Lambda}` -> `min_(Θ,Λ)`).
+- **LaTeX's own whitespace rules**: a source line break is only a space,
+  and spaces inside math fonts are ignored -- OCR's `\mathrm{a r g m i n}`
+  is `argmin`.
 - **A guard against `$...$` false positives**: naive math-span detection
   (and, confirmed directly via a live tree-sitter-markdown parse,
   `render-markdown.nvim`'s own inline-math grammar) pairs the first `$` with
@@ -90,3 +95,8 @@ Both read and write UTF-8 whatever the locale, and take only `--help` /
 ```
 uv run pytest
 ```
+
+`examples/test-sample.md` and `examples/multiline.md` are both documentation
+and tests: each example line's `<!-- expect: ... -->` comment is its expected
+rendering, checked by `tests/test_examples.py`. Open them in nvim with
+render-markdown to see the same formulas rendered in place.
