@@ -19,3 +19,8 @@ test = ["pytest>=8.0.0"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+# Fail on any warning, including SyntaxWarning for an invalid escape in a
+# test string (easy to write in LaTeX test cases, and silently wrong).
+filterwarnings = ["error"]
