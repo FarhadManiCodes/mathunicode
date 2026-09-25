@@ -81,8 +81,10 @@ _CONTEXT_DB = _build_context_db()
 # break, then a real subscript) is.
 _MARKER = r"(?<!(?<!\\)\\)[_^]"
 
-# Whitespace before a marker is kept when it is a control space ('\ ').
-_SPACED_MARKER = re.compile(rf"(?:(?<!\\)\s+)?({_MARKER})\s*")
+# Whitespace before a marker is kept when it is a control space ('\ '). A match
+# only starts at the beginning of a whitespace run: starting inside long runs
+# too made this quadratic.
+_SPACED_MARKER = re.compile(rf"(?:(?<![\s\\])\s+)?({_MARKER})\s*")
 _SPACED_GROUP = re.compile(rf"({_MARKER}\{{)([^{{}}]*)\}}")
 _LETTER_GAP = re.compile(r"(?<=[A-Za-z])\s+(?=[A-Za-z])")
 
