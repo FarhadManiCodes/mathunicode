@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
+        python: ["3.12", "3.13", "3.14"]
         # The dependency floor (pyproject: pylatexenc>=2.10) and the locked one.
         pylatexenc: ["locked", "2.10"]
     steps:
@@ -20,7 +20,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Tests (locked pylatexenc)
         if: matrix.pylatexenc == 'locked'
-        run: uv run pytest -q
+        run: uv run --locked pytest -q
       - name: Tests (pylatexenc ${{ matrix.pylatexenc }})
         if: matrix.pylatexenc != 'locked'
-        run: uv run --with "pylatexenc==${{ matrix.pylatexenc }}" pytest -q
+        run: uv run --locked --with "pylatexenc==${{ matrix.pylatexenc }}" pytest -q
