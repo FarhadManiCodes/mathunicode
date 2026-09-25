@@ -14,7 +14,7 @@ from latex2mathml.converter import convert_to_element
 _SUB = dict(zip("0123456789+-−=()aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ", strict=True))
 _SUP = dict(zip("0123456789+-−=()abcdefghijklmnoprstuvwxyzABDEGHIJKLMNOPRTUVW∘",  # raised ∘ is a degree
                 "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂ°", strict=True))
-_RAISED = set("′″‴°*")  # already raised: appended as they are
+_SUP.update({c: c for c in "′″‴°*"})  # already raised: kept as they are
 # Marks over/under a base -> combining characters ("" for braces: dropped).
 _ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "̃",
             "˜": "̃", "˙": "̇", "¨": "̈", "→": "⃗", "ˇ": "̌", "˘": "̆",
@@ -57,42 +57,78 @@ def _upright_word(node) -> str | None:
 
 
 def _class(node) -> str:
-    """TeX's atom class: a scripted atom has its nucleus's, a fraction or table is Inner, a
-    word (sin, \\mathrm{argmin}) is Op, a group opened by a fence ('\\left(') is Inner."""
-    text = _text(node)  # an unknown macro ('\\sech') is an operator name
-    if node.get("form") in ("prefix", "postfix"):  # a fence, as MathML marks '\\left', '\\right'
+    """TeX's atom class: a scripted atom has its nucleus's, a fraction or table is Inner, an
+    operator name (sin, \\operatorname, an unknown macro) is Op, a fence follows MathML's form."""
+    if node.get("form") in ("prefix", "postfix"):  # '\\left', '\\right'
         return "Open" if node.get("form") == "prefix" else "Close"
-    if len(_upright_word(node) or "") > 1 or (len(text) > 1 and text.isalpha()):
-        return "Op"
     if node.tag in _SCRIPTS and len(node):
         return _class(node[0])
-    if node.tag in ("mfrac", "mtable") or (node.tag == "mrow" and len(node) > 1 and _class(node[0]) == "Open"):
+    if node.tag in ("mfrac", "mtable"):
         return "Inner"
     if node.tag in ("mrow", "mstyle") and len(node) == 1:
         return _class(node[0])
+    text = _text(node) if node.tag in ("mi", "mo") else ""
+    if len(text) > 1 and text.isalpha() and not node.get("mathvariant"):
+        return "Op"
     return _CLASS.get(text, "Ord") if len(text) == 1 else "Ord"
+
+
+def _atoms(kids) -> list[list[tuple[str, object]]]:
+    """(class, node) per row, without rendering: '&' is only an alignment point, a line break starts
+    a row, a run of upright letters is one word, bars pair up (odd opens, even closes), a Bin with
+    no operand before it is a Sign (TeX's Ord, attached to what follows) and before a Rel, Close or
+    Punct an Ord; an explicit space is a 'Space' atom."""
+    rows: list[list[tuple[str, object]]] = [[]]
+    bars = 0
+    for upright, group in groupby(kids, key=lambda k: _upright_word(k) is not None):
+        run = list(group)
+        if upright:  # one word, standing in for its letters
+            word = Element("mi", mathvariant="normal")
+            word.text, run = "".join(map(_upright_word, run)), [word]
+        for k in run:
+            if k.tag == "mspace" and k.get("linebreak") == "newline":
+                rows.append([])
+                continue
+            if k.tag == "mi" and k.text == "&":
+                continue
+            cls = "Space" if k.tag == "mspace" else _class(k)
+            nucleus = k[0] if k.tag in _SCRIPTS and len(k) else k  # a closing bar may carry a script: '|x|₁'
+            if nucleus.tag == "mo" and _text(nucleus) in ("|", "‖") and not nucleus.get("form"):
+                cls, bars = ("Open" if bars % 2 == 0 else "Close"), bars + 1
+            atoms = [c for c, _ in rows[-1] if c != "Space"]
+            if cls == "Bin" and (not atoms or atoms[-1] in ("Bin", "Op", "Rel", "Open", "Punct", "Sign")):
+                cls = "Sign"
+            if atoms and atoms[-1] == "Bin" and cls in ("Rel", "Close", "Punct"):
+                i = max(i for i, (c, _) in enumerate(rows[-1]) if c == "Bin")
+                rows[-1][i] = ("Ord", rows[-1][i][1])
+            rows[-1].append((cls, k))
+    return rows
+
+
+def _word(node) -> bool:
+    """A multi-letter upright word, or one scripted ('Errₜ'): it never touches a letter or number."""
+    nucleus = node[0] if node.tag in _SCRIPTS and len(node) else node
+    return len(_upright_word(nucleus) or "") > 1
 
 
 def _unit(node, script: bool = False) -> bool:
     """Reads as one unit without parentheses: a token (identifier, number, operator, text, upright
     word), a group wholly inside one pair of fences ('(a + b)', '\\left. df/dx \\right|'), or --
     as a base, not a script -- a scripted unit ('xᵢ²')."""
-    kids = list(node)
-    if node.tag in ("mrow", "mstyle") and len(kids) == 1:
-        return _unit(kids[0], script)
+    if node.tag in ("mrow", "mstyle") and len(node) == 1:
+        return _unit(node[0], script)
     if node.tag in ("mi", "mn", "mo", "mtext") or _upright_word(node):
         return True
     if node.tag in _SCRIPTS:
-        return not script and (not kids or _unit(kids[0]))
-    bars = [k.tag == "mo" and _text(k) in ("|", "‖") for k in kids]
-    if node.tag != "mrow" or len(kids) < 2 or any(bars[1:-1]):
+        return not script and (not len(node) or _unit(node[0]))
+    rows = _atoms(list(node)) if node.tag == "mrow" else []
+    classes = [c for c, _ in rows[0] if c != "Space"] if len(rows) == 1 else []
+    if len(classes) < 2 or classes[0] != "Open" or classes[-1] != "Close":
         return False
-    if not ((_class(kids[0]) == "Open" or bars[0]) and (_class(kids[-1]) == "Close" or bars[-1])):
-        return False
-    depths = [0]  # the first fence must close only at the end
-    for k in kids[1:-1]:
-        depths.append(depths[-1] + ({"Open": 1, "Close": -1}.get(_class(k), 0) if k.tag == "mo" else 0))
-    return min(depths) >= 0
+    depth = [0]  # the first fence closes only at the end
+    for c in classes:
+        depth.append(depth[-1] + {"Open": 1, "Close": -1}.get(c, 0))
+    return 0 not in depth[1:-1]
 
 
 def _script(base: str, script_node, marker: str) -> str:
@@ -100,22 +136,20 @@ def _script(base: str, script_node, marker: str) -> str:
     table, chars = (_SUB if marker == "_" else _SUP), text.replace(" ", "")
     if chars and all(c in table for c in chars):
         return base + "".join(table[c] for c in chars)
-    if chars and marker == "^" and set(chars) <= _RAISED:
-        return base + chars
     return f"{base}{marker}{text if _unit(script_node, script=True) else f'({text})'}" if chars else base
 
 
 def _render(node) -> str:
-    tag, kids, text = node.tag, list(node), html.unescape(node.text or "")
+    tag, kids = node.tag, list(node)
     if tag == "mtext":
-        return re.sub(r"\\([_$%&#{}])", r"\1", text)
+        return re.sub(r"\\([_$%&#{}])", r"\1", html.unescape(node.text or ""))
     if tag in ("mi", "mn", "mo", "ms"):
         style = frozenset(re.split(r"[- ]", (node.get("mathvariant") or "").upper()))
         return "".join(_STYLED.get((style, c), c) for c in _text(node))
     if tag in ("mspace", "mphantom"):
         return " " if tag == "mspace" else ""
-    if tag in ("munder", "mover") and len(kids) == 2 and _render(kids[1]).strip() in _ACCENTS:
-        base, mark = _render(kids[0]), _ACCENTS[_render(kids[1]).strip()]
+    if tag in ("munder", "mover") and len(kids) == 2 and (mark := _ACCENTS.get(_render(kids[1]).strip())) is not None:
+        base = _render(kids[0])
         return "".join(c + mark for c in base) if mark and 0 < len(base) <= 3 and base.isalnum() else base
     if tag in _SCRIPTS and len(kids) in (2, 3):
         out = _render(kids[0])
@@ -126,8 +160,9 @@ def _render(node) -> str:
         return out
     if tag == "mfrac" and len(kids) == 2 and node.get("linethickness") == "0":  # a stack ('\\binom')
         return f"{_render(kids[0])}; {_render(kids[1])}"
-    if tag == "mfrac" and len(kids) == 2:
-        top, bottom = (f"({_render(k)})" if _compound(k) else _render(k) for k in kids)
+    if tag == "mfrac" and len(kids) == 2:  # a side is grouped only if it has a top-level Bin, Rel or Punct
+        top, bottom = (f"({_render(k)})" if any(c in ("Bin", "Rel", "Punct") for row in _atoms(
+            list(k) if k.tag in ("mrow", "mstyle") else [k]) for c, _ in row) else _render(k) for k in kids)
         return f"{top}/{bottom}"
     if tag in ("msqrt", "mroot"):
         radicand = kids[0] if tag == "mroot" or len(kids) == 1 else node
@@ -139,12 +174,6 @@ def _render(node) -> str:
     return _render_row(kids)
 
 
-def _compound(node) -> bool:
-    """Has a top-level Bin, Rel or Punct: a fraction's side then needs parentheses ('(a + b)/c')."""
-    kids = list(node) if node.tag in ("mrow", "mstyle") else [node]
-    return any(cls in ("Bin", "Rel", "Punct") for row in _rows(kids) for cls, _ in row)
-
-
 def _cells(cells: list[str]) -> str:
     """Cells joined by ', ' -- a space if one continues an alignment ('= b') or follows punctuation."""
     out = ""
@@ -153,41 +182,23 @@ def _cells(cells: list[str]) -> str:
     return out
 
 
-def _rows(kids) -> list[list[tuple[str, str]]]:
-    """(class, text) atoms per row: '&' is only an alignment point, a line break starts a row, a
-    run of upright letters is one word, and a Bin with no operand before it is Ord (TeX's rule)."""
-    rows: list[list[tuple[str, str]]] = [[]]
-    bars = 0  # '|' / '‖' with no fence marking: odd ones open, even ones close
-    for upright, group in groupby(kids, key=lambda k: _upright_word(k) is not None):
-        run = list(group)
-        if upright:  # one word, standing in for its letters
-            word = Element("mi", mathvariant="normal")
-            word.text, run = "".join(map(_upright_word, run)), [word]
-        for k in run:
-            if k.tag == "mspace" and k.get("linebreak") == "newline":
-                rows.append([])
-            elif k.tag == "mspace" and rows[-1]:
-                rows[-1][-1] = (rows[-1][-1][0], rows[-1][-1][1] + " ")
-            elif (text := _render(k)) and not (k.tag == "mi" and k.text == "&"):
-                cls = _class(k)
-                if _text(k) in ("|", "‖") and k.tag == "mo" and not k.get("form"):
-                    cls, bars = ("Open" if bars % 2 == 0 else "Close"), bars + 1
-                if cls == "Bin" and (not rows[-1] or rows[-1][-1][0] in ("Bin", "Op", "Rel", "Open", "Punct", "Sign")):
-                    cls = "Sign"  # a prefix sign: an Ord (TeX's rule) that attaches to what follows
-                if rows[-1] and rows[-1][-1][0] == "Bin" and cls in ("Rel", "Close", "Punct"):
-                    rows[-1][-1] = ("Ord", rows[-1][-1][1])
-                rows[-1].append((cls, text))
-    return rows
-
-
 def _render_row(kids) -> str:
-    """Atoms spaced by TeX's table; rows joined by '; ', so the output is one line."""
+    """Atoms spaced by TeX's table, a word apart from a letter or number, an operator name right
+    before its parenthesized argument; rows joined by '; '."""
     lines = []
-    for row in _rows(kids):
-        line = row[0][1] if row else ""
-        for (left, _), (right, text) in zip(row, row[1:], strict=False):
-            spaced = left != "Sign" and _SPACING[left][_ORDER.index("Ord" if right == "Sign" else right)] == "1"
-            line += (" " if spaced else "") + text
+    for row in _atoms(kids):
+        line, left = "", None  # left: the previous atom's (class, node, text)
+        for cls, node in row:
+            if cls == "Space":
+                line += " "
+                continue
+            text = _render(node)
+            applied = left is not None and left[0] == "Op" and text[:1] in "(["  # 'det(A)', 'Cov\\left(…'
+            touching = left is not None and left[2][-1:].isalnum() and text[:1].isalnum()
+            spaced = left is not None and left[0] != "Sign" and not applied and (
+                _SPACING[left[0]][_ORDER.index("Ord" if cls == "Sign" else cls)] == "1"
+                or (touching and (_word(left[1]) or _word(node))))
+            line, left = line + (" " if spaced else "") + text, (cls, node, text)
         if line.strip():
             lines.append(re.sub(r"\s+", " ", line).strip())
     return "; ".join(lines)
