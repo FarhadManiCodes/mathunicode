@@ -6,9 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [
-  # Uses 2.x internals (MacroTextSpec callables, parsed macro arguments);
-  # pylatexenc 3 is a rewrite. Tested on 2.10 and 2.11.
-  "pylatexenc>=2.10,<3",
+  "latex2mathml>=3.81,<4",
 ]
 
 [project.scripts]

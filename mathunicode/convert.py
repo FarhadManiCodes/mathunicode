@@ -1,915 +1,248 @@
-"""LaTeX -> readable Unicode approximation, built on pylatexenc.
+"""LaTeX math -> one line of Unicode: latex2mathml parses it into MathML (the W3C math structure), and
+_render gives each element one rule. Public: latex_to_unicode, convert_math_spans, collapse_math_blocks."""
 
-Three layers, top to bottom:
-
-1. pylatexenc context: pylatexenc's default macro table silently drops or
-   mishandles many math macros -- real content loss, not cosmetics
-   (``\\|x\\|^2`` -> ``x^2``, ``\\det(A)`` -> ``(A)``, ``\\frac{a}`` ->
-   ``%s/%sa``). The fixes were found by running every macro used across a
-   real paper library through the converter, not guessed.
-2. One expression (``latex_to_unicode``): pre-passes on the LaTeX source for
-   what pylatexenc can't do -- source line breaks as spaces, undo OCR
-   spacing, keep the space after operators and relations, real Unicode
-   sub/superscripts -- then pylatexenc. The output is always one line:
-   multi-row constructs (matrices, cases, aligned, ``\\\\``) use a linear
-   notation, rows joined by '; ', so they compose with the math around them.
-3. A Markdown document (``convert_math_spans``, ``collapse_math_blocks``):
-   finding the math -- which '$'s pair up, skipping code -- and converting
-   or collapsing it in place.
-
-Public API: the three functions above (re-exported by the package). The
-rest is private and may change.
-"""
-
+import html
 import re
 import unicodedata
 from bisect import bisect_left
 from collections import defaultdict, deque
-
-from pylatexenc import latexwalker, macrospec
-from pylatexenc.latex2text import (
-    EnvironmentTextSpec,
-    LatexNodes2Text,
-    MacroTextSpec,
-    get_default_latex_context_db,
-)
-
-
-def _build_parse_db():
-    """Parser-side specs for fixed macros that take arguments -- without one,
-    pylatexenc parses '\\pmod{n}' as an argument-less macro followed by a
-    separate '{n}' group, and the text spec below never sees the 'n'."""
-    db = latexwalker.get_default_latex_context_db()
-    db.add_context_category(
-        "mathunicode-fixes",
-        prepend=True,
-        macros=[
-            macrospec.std_macro("pmod", False, 1),
-            *(macrospec.std_macro(name, False, 2) for name in ("binom", "dbinom", "tbinom")),
-        ],
-        # alignedat{n} takes a column count, like alignat{n} (which pylatexenc
-        # knows); without the spec the 'n' is read as content. Its optional
-        # [t]/[b] position is removed beforehand (_POSITION_ARGUMENT).
-        environments=[macrospec.std_environment("alignedat", "{")],
-    )
-    return db
-
-
-# The callables below get pylatexenc's converter as 'l2tobj' (it passes it by
-# that name). Each tolerates missing arguments -- truncated or OCR-broken
-# input like a bare '\\binom' -- rather than raising, which would make the
-# whole expression fall back to raw text.
-
-
-def _arg_texts(node, l2tobj) -> list[str]:
-    """Converted text of each argument slot ('' for a missing one)."""
-    args = getattr(node.nodeargd, "argnlist", None) or []
-    return [l2tobj.nodelist_to_text([a]).strip() if a is not None else "" for a in args]
-
-
-def _labelled_arrow(arrow: str, label_first: bool):
-    """Text for '\\xrightarrow[below]{above}': the 'above' label drawn on the
-    arrow's tail, '-f→' (or '←f-' for a left arrow); a bare arrow without
-    one. The rarer 'below' label is dropped."""
-
-    def repl(node, l2tobj) -> str:
-        texts = _arg_texts(node, l2tobj)
-        label = texts[1] if len(texts) > 1 else ""
-        if not label:
-            return arrow
-        return f"-{label}{arrow}" if label_first else f"{arrow}{label}-"
-
-    return repl
-
-
-def _wide_accent(narrow_repl):
-    """Text for a wide accent ('\\overline{AB}'), which pylatexenc drops: the
-    narrow accent's combining mark on each character ('A̅B̅', 'Δ̅r̅') for up to 3
-    plain letters or digits, else the plain argument -- a mark on every
-    character of a longer expression is noise. Sub/superscript characters
-    ('₁', 'ⁿ', Unicode categories No/Lm) don't count as plain."""
-
-    def repl(node, l2tobj) -> str:
-        text = "".join(_arg_texts(node, l2tobj))
-        if 0 < len(text) <= 3 and all(unicodedata.category(c) in ("Lu", "Ll", "Nd") for c in text):
-            return narrow_repl(node, l2tobj=l2tobj)
-        return text
-
-    return repl
-
-
-def _binom(node, l2tobj) -> str:
-    """'\\binom{n}{k}' -> 'C(n,k)'; with an argument missing, just what's there."""
-    texts = _arg_texts(node, l2tobj)
-    if len(texts) == 2 and all(texts):
-        return f"C({texts[0]},{texts[1]})"
-    return " ".join(t for t in texts if t)
-
-
-def _pmod(node, l2tobj) -> str:
-    """'\\pmod{n}' -> '(mod n)'; a bare 'mod' with its argument missing."""
-    texts = _arg_texts(node, l2tobj)
-    return f"(mod {texts[0]})" if texts and texts[0] else "mod"
-
-
-def _tolerant_template(template: str):
-    """One of pylatexenc's own '%s' templates ('%s/%s' for \\frac, '√(%(2)s)'
-    for \\sqrt), filled the same way, but with a required argument missing
-    just the arguments that are there: pylatexenc leaks the raw template
-    ('\\frac{a}' -> '%s/%sa') or raises (a bare '\\sqrt')."""
-
-    # The argument slots the template fills: '%(2)s' fills slot 2, and each
-    # positional '%s' the next slot in order.
-    numbered = [int(n) - 1 for n in re.findall(r"%\((\d+)\)s", template)]
-    used = numbered or list(range(template.count("%s")))
-
-    def repl(node, l2tobj) -> str:
-        args = getattr(node.nodeargd, "argnlist", None) or []
-        texts = _arg_texts(node, l2tobj)
-        required_missing = any(i >= len(args) or args[i] is None for i in used)
-        if required_missing:
-            return " ".join(t for t in texts if t)
-        if "%(" in template:
-            return template % {str(i + 1): t for i, t in enumerate(texts)}
-        return template % tuple(texts)
-
-    return repl
-
-
-def _tolerant_templates(db, overridden: tuple[str, ...]) -> list[MacroTextSpec]:
-    """A _tolerant_template spec for each default macro whose text is a '%'
-    template, except those given their own spec here."""
-    specs = {}
-    for category in db.categories():
-        for name, spec in db.d[category]["macros"].items():
-            template = spec.simplify_repl
-            if name not in specs and name not in overridden and isinstance(template, str) and "%" in template:
-                specs[name] = MacroTextSpec(name, simplify_repl=_tolerant_template(template))
-    return list(specs.values())
-
-
-# Multi-row environments, in one linear notation: rows joined by '; '. A true
-# 2-D layout would need a box-layout typesetter to compose the rows with the
-# math around them ('f(x) = \\begin{cases}...'); rows as separate output lines
-# instead come out misaligned, so every construct stays on one line and
-# composes like any other text. pylatexenc's own matrix format ('[ a b; c d ]'
-# for every kind) loses which delimiters were used, and it has none at all
-# for cases/aligned.
-_ROW_BREAK_MACROS = ("\\", "newline", "cr", "tabularnewline")
-_MATRIX_DELIMITERS = {
-    "matrix": ("", ""), "smallmatrix": ("", ""), "array": ("", ""),
-    "pmatrix": ("(", ")"), "psmallmatrix": ("(", ")"),
-    "bmatrix": ("[", "]"), "bsmallmatrix": ("[", "]"),
-    "Bmatrix": ("{", "}"), "vmatrix": ("|", "|"), "Vmatrix": ("‖", "‖"),
-}
-_CASES_ENVIRONMENTS = ("cases", "dcases", "rcases")
-_ALIGNED_ENVIRONMENTS = (
-    "align", "align*", "aligned", "alignat", "alignat*", "alignedat", "flalign", "flalign*",
-    "gather", "gather*", "gathered", "split", "multline", "multline*", "eqnarray", "eqnarray*",
-)
-
-
-def _grid(node, l2tobj) -> list[list[str]]:
-    """An environment's cells, split on '&' and on row breaks ('\\\\'), each
-    cell converted and trimmed; rows with no content (e.g. after a trailing
-    '\\\\') dropped."""
-    rows: list[list[str]] = []
-    cells: list[str] = []
-    cell_nodes: list = []
-
-    def end_cell() -> None:
-        cells.append(l2tobj.nodelist_to_text(cell_nodes).strip())
-        cell_nodes.clear()
-
-    for n in node.nodelist or []:
-        if n.isNodeType(latexwalker.LatexSpecialsNode) and n.specials_chars == "&":
-            end_cell()
-        elif n.isNodeType(latexwalker.LatexMacroNode) and n.macroname in _ROW_BREAK_MACROS:
-            end_cell()
-            rows.append(cells)
-            cells = []
-        else:
-            cell_nodes.append(n)
-    end_cell()
-    rows.append(cells)
-    return [row for row in rows if any(row)]
-
-
-def _rows_text(node, l2tobj, cell_sep: str) -> str:
-    return "; ".join(cell_sep.join(c for c in row if c) for row in _grid(node, l2tobj))
-
-
-def _matrix(opening: str, closing: str):
-    """'\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}' -> '(1 2; 3 4)'."""
-    return lambda node, l2tobj: f"{opening}{_rows_text(node, l2tobj, ' ')}{closing}"
-
-
-def _cases(node, l2tobj) -> str:
-    """'\\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}' -> '{1, x>0; 0, else}'.
-    A comma the source already puts before '&' ('x, & a') isn't doubled."""
-    rows = [[c.rstrip().rstrip(",").rstrip() for c in row] for row in _grid(node, l2tobj)]
-    return "{" + "; ".join(", ".join(c for c in row if c) for row in rows) + "}"
-
-
-def _aligned(node, l2tobj) -> str:
-    """'\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}' -> 'a = b; c = d': '&'
-    is only an alignment point."""
-    return _rows_text(node, l2tobj, " ")
-
-
-def _row_environments() -> list[EnvironmentTextSpec]:
-    specs = [
-        EnvironmentTextSpec(name, simplify_repl=_matrix(opening, closing))
-        for name, (opening, closing) in _MATRIX_DELIMITERS.items()
-    ]
-    specs += [EnvironmentTextSpec(name, simplify_repl=_cases) for name in _CASES_ENVIRONMENTS]
-    specs += [EnvironmentTextSpec(name, simplify_repl=_aligned) for name in _ALIGNED_ENVIRONMENTS]
-    return specs
-
-
-def _build_context_db():
-    db = get_default_latex_context_db()
-    wide_accents = [
-        MacroTextSpec(wide, simplify_repl=_wide_accent(db.get_macro_spec(narrow).simplify_repl))
-        for wide, narrow in (("overline", "bar"), ("widetilde", "tilde"), ("widehat", "hat"))
-    ]
-    db.add_context_category(
-        "mathunicode-fixes",
-        prepend=True,
-        macros=[
-            MacroTextSpec("|", simplify_repl="‖"),
-            MacroTextSpec("coloneqq", simplify_repl=":="),
-            MacroTextSpec("land", simplify_repl="∧"),
-            MacroTextSpec("arg", simplify_repl="arg"),
-            MacroTextSpec("Pr", simplify_repl="Pr"),
-            MacroTextSpec("circledR", simplify_repl="®"),
-            MacroTextSpec("cot", simplify_repl="cot"),
-            MacroTextSpec("csc", simplify_repl="csc"),
-            MacroTextSpec("det", simplify_repl="det"),
-            # Operator names and symbols pylatexenc drops entirely.
-            MacroTextSpec("sec", simplify_repl="sec"),
-            MacroTextSpec("coth", simplify_repl="coth"),
-            MacroTextSpec("lg", simplify_repl="lg"),
-            MacroTextSpec("ker", simplify_repl="ker"),
-            MacroTextSpec("dim", simplify_repl="dim"),
-            MacroTextSpec("deg", simplify_repl="deg"),
-            MacroTextSpec("gcd", simplify_repl="gcd"),
-            MacroTextSpec("hom", simplify_repl="hom"),
-            MacroTextSpec("mod", simplify_repl="mod"),
-            MacroTextSpec("bmod", simplify_repl="mod"),
-            MacroTextSpec("pmod", simplify_repl=_pmod),
-            MacroTextSpec("lor", simplify_repl="∨"),
-            MacroTextSpec("neg", simplify_repl="¬"),
-            MacroTextSpec("iff", simplify_repl="⟺"),
-            MacroTextSpec("implies", simplify_repl="⟹"),
-            MacroTextSpec("impliedby", simplify_repl="⟸"),
-            MacroTextSpec("gets", simplify_repl="←"),
-            MacroTextSpec("colon", simplify_repl=":"),
-            MacroTextSpec("colonequals", simplify_repl=":="),
-            MacroTextSpec("coloneq", simplify_repl=":="),
-            MacroTextSpec("eqqcolon", simplify_repl="=:"),
-            MacroTextSpec("eqcolon", simplify_repl="=:"),
-            MacroTextSpec("Coloneqq", simplify_repl="::="),
-            MacroTextSpec("models", simplify_repl="⊨"),
-            MacroTextSpec("vDash", simplify_repl="⊨"),
-            MacroTextSpec("bot", simplify_repl="⊥"),
-            MacroTextSpec("Box", simplify_repl="□"),
-            MacroTextSpec("Diamond", simplify_repl="◇"),
-            MacroTextSpec("checkmark", simplify_repl="✓"),
-            MacroTextSpec("ddagger", simplify_repl="‡"),
-            MacroTextSpec("llbracket", simplify_repl="⟦"),
-            MacroTextSpec("rrbracket", simplify_repl="⟧"),
-            MacroTextSpec("S", simplify_repl="§"),
-            MacroTextSpec("P", simplify_repl="¶"),
-            *wide_accents,
-            MacroTextSpec("xrightarrow", simplify_repl=_labelled_arrow("→", label_first=True)),
-            MacroTextSpec("xleftarrow", simplify_repl=_labelled_arrow("←", label_first=False)),
-            *(
-                MacroTextSpec(name, simplify_repl=_binom)
-                for name in ("binom", "dbinom", "tbinom")
-            ),
-            *_tolerant_templates(db, overridden=("overline", "widetilde", "widehat")),
-            # amsmath's italic capital Greek; plain Unicode has only upright.
-            *(
-                MacroTextSpec("var" + name, simplify_repl=char)
-                for name, char in zip(
-                    "Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega".split(),
-                    "ΓΔΘΛΞΠΣΥΦΨΩ",
-                )
-            ),
-        ],
-        environments=_row_environments(),
-    )
-    return db
-
-
-_PARSE_DB = _build_parse_db()
-_CONTEXT_DB = _build_context_db()
-
-
-# A '_'/'^' script marker. The escaped '\_' (literal underscore) and the
-# accent macro '\^' ('\^{o}' -> 'ô') are not script markers; '\\_' (a line
-# break, then a real subscript) is.
-_MARKER = r"(?<!(?<!\\)\\)[_^]"
-
-# Whitespace before a marker is kept when it is a control space ('\ '). A match
-# only starts at the beginning of a whitespace run: starting inside long runs
-# too made this quadratic.
-_SPACED_MARKER = re.compile(rf"(?:(?<![\s\\])\s+)?({_MARKER})\s*")
-_SPACED_GROUP = re.compile(rf"({_MARKER}\{{)([^{{}}]*)\}}")
-_LETTER_GAP = re.compile(r"(?<=[A-Za-z])\s+(?=[A-Za-z])")
-_MACRO_WITH_SPACE = re.compile(r"(\\[A-Za-z]+\s*)")
-
-
-# A TeX comment: an unescaped '%' ('\\%' is a literal percent; '\\\\%' a line
-# break and then a comment) to the end of its line.
-_TEX_COMMENT = re.compile(r"(?<!(?<!\\)\\)%[^\n]*")
-# A line break in the source, with the whitespace around it.
-_SOURCE_NEWLINE = re.compile(r"[ \t]*\r?\n\s*")
-
-
-# '\\left.' / '\\right.' (and sized forms): an invisible delimiter, which
-# pylatexenc prints as '.'.
-_NULL_DELIMITER = re.compile(r"\\(?:left|right|[bB]igg?[lr]?)\s*\.")
-
-
-# The optional vertical position of aligned/gathered/alignedat ('[t]', '[b]',
-# '[c]'), which would otherwise print. Only those exact values: a generic
-# optional argument would swallow real content such as the interval in
-# '\\begin{aligned} [a,b] &= c'.
-_POSITION_ARGUMENT = re.compile(r"(\\begin\s*\{(?:aligned|gathered|alignedat)\})\s*\[[tbc]\]")
-
-
-# A math-font argument: math mode ignores spaces in it, so '\\mathrm{V a r}'
-# is typeset 'Var' -- OCR tools space out every letter there (2,229 spans in
-# the paper library). Text-mode macros (\\text, \\mbox) keep their spaces.
-_MATH_FONT_ARGUMENT = re.compile(
-    r"(\\(?:mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|mathscr"
-    r"|boldsymbol|operatorname)\*?\s*\{)([^{}]*)\}"
-)
-
-
-def _drop_math_font_spaces(tex: str) -> str:
-    """'\\mathrm{a r g m i n}' -> '\\mathrm{argmin}'. The space after a macro
-    name inside the argument is kept: it ends the name ('\\alpha x')."""
-
-    def _drop(m: re.Match[str]) -> str:
-        parts = _MACRO_WITH_SPACE.split(m.group(2))
-        return m.group(1) + "".join(
-            part if i % 2 else "".join(part.split()) for i, part in enumerate(parts)
-        ) + "}"
-
-    return _MATH_FONT_ARGUMENT.sub(_drop, tex)
-
-
-# How OCR tools (MinerU) write cases: an array opened by '\\left\\{' and
-# closed by the invisible '\\right.' (176 spans in the paper library). Read
-# as cases, it gets the cases notation ('{1, x>0; 0, else}') instead of an
-# array's bare rows.
-_ARRAY_AS_CASES = re.compile(
-    r"\\left\s*\\\{\s*\\begin\s*\{array\}\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}"
-    r"(?P<body>.*?)\\end\s*\{array\}\s*\\right\s*\.",
-    re.DOTALL,
-)
-
-
-def _join_source_lines(tex: str) -> str:
-    """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
-    come from '\\\\', never from source line breaks, so the source is joined
-    onto one line -- comments first, or joining would let a comment swallow
-    the lines after it (pylatexenc drops comments anyway)."""
-    tex = _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
-    tex = _ARRAY_AS_CASES.sub(r"\\begin{cases}\g<body>\\end{cases}", tex)
-    tex = _NULL_DELIMITER.sub("", tex)
-    return _POSITION_ARGUMENT.sub(r"\1", tex)
-
-
-def _join_rows(text: str) -> str:
-    """pylatexenc's output has a line break for each '\\\\' outside a row
-    environment (top level, \\substack); those rows are trimmed and joined
-    with '; ' like an environment's, and empty ones -- from a leading or
-    trailing '\\\\' -- dropped. The result is always one line."""
-    return "; ".join(row for row in (r.strip() for r in text.split("\n")) if row)
-
-
-def _normalize_math_spacing(tex: str) -> str:
-    """Undo OCR tools' inconsistent spacing around subscripts/superscripts,
-    e.g. 'x _ {i}' -> 'x_{i}' and 'u _ {p h y}' -> 'u_{phy}'.
-
-    Two steps with deliberately different scopes:
-    1. The first substitution strips whitespace -- including newlines --
-       around *every* '_'/'^' in the input, not only script groups. This is
-       intentional: it operates on a single already-isolated math expression,
-       where any space adjacent to a script marker is an OCR artifact.
-    2. The letter-spacing collapse ('p h y' -> 'phy') is then scoped to
-       '_{...}'/'^{...}' groups only, since 'a b' in the body could be
-       intentional (implicit multiplication)."""
-    tex = _SPACED_MARKER.sub(r"\1", tex)
-
-    def _collapse(m: re.Match[str]) -> str:
-        # Macro names (with the space after them) are kept whole: collapsing
-        # '\\omega t' to '\\omegat' makes an unknown macro, which pylatexenc
-        # drops -- 'e^{-i\\omega t}' lost its 'ωt'.
-        parts = _MACRO_WITH_SPACE.split(m.group(2))
-        return m.group(1) + "".join(
-            part if i % 2 else _LETTER_GAP.sub("", part) for i, part in enumerate(parts)
-        ) + "}"
-
-    return _SPACED_GROUP.sub(_collapse, tex)
-
-
-# pylatexenc drops the whitespace after a macro, gluing its output to what
-# follows: '\sin x' -> 'sinx', 'a \to b' -> 'a →b'. For operator names and
-# relation/arrow/binary-operator symbols, where that space matters, it's kept
-# by ending the macro name with '{}' ('\sin{} x' -> 'sin x'). Other macros
-# (Greek letters, \nabla, ...) stay tight: '\Delta t' -> 'Δt' reads better
-# than 'Δ t' in OCR output that spaces every token.
-_WORD_OPERATORS = (
-    "sin cos tan cot sec csc sinh cosh tanh coth arcsin arccos arctan "
-    "arg deg det dim exp gcd hom inf ker lg lim liminf limsup ln log max min "
-    "Pr sup mod bmod"
-)
-_RELATIONS = (
-    "to gets mapsto rightarrow leftarrow leftrightarrow Rightarrow Leftarrow "
-    "Leftrightarrow longrightarrow longleftarrow Longrightarrow Longleftarrow "
-    "implies impliedby iff in notin ni subset subseteq supset supseteq "
-    "le leq ge geq ne neq ll gg approx equiv sim simeq cong propto perp mid "
-    "parallel coloneqq colonequals coloneq eqqcolon eqcolon Coloneqq models vDash "
-    "land lor wedge vee cdot times div pm mp circ cup cap "
-    "setminus oplus otimes"
-)
-# Both lookaheads start with whitespace, so only whole macro names match
-# ('\in' never matches inside '\int').
-_SPACED_MACRO = re.compile(
-    # A word operator before a letter, digit or macro -- '\sin x', '\log \alpha'
-    # but not '\exp (x)' or '\sin \left(', where the space is OCR noise.
-    rf"\\(?:{'|'.join(_WORD_OPERATORS.split())})"
-    r"(?=\s+(?:[A-Za-z0-9]|\\\||\\(?!left|right|[bB]igg?[lr]?\b)[A-Za-z]))"
-    # A relation spaced on both sides, before anything but a script marker or
-    # closing brace. A tight 'a\leq b' stays 'a≤b': the space after '\leq'
-    # there only ends the macro name. An alignment '&' or a spacing macro
-    # ('\quad', '\,', '~', ...) counts as the space before.
-    rf"|(?:(?<=[\s&~])|(?<=\\[,;:])|(?<=\\quad)|(?<=\\qquad)|^)\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
-)
-
-
-# '\colon' is set like punctuation, 'f: X': no space before it, and one after
-# (as a control space '\ ') unless nothing follows. A control space before it
-# is kept.
-_SPACED_COLON = re.compile(r"(?:(?<![\s\\])\s+)?\\colon(?![A-Za-z])\s*(?P<next>[^\s}]?)")
-
-# In math mode LaTeX ignores spaces around the thin/medium/thick/negative
-# space macros, but pylatexenc prints them next to theirs: 'x\,\to\, y' ->
-# 'x →  y'. An escaped backslash ('\\,': line break, comma) isn't one, and a
-# control space '\ ' before one is kept. Leading whitespace is matched only
-# from the start of its run, which keeps this linear.
-_SPACE_AROUND_SPACING_MACRO = re.compile(r"(?:(?<![\s\\])\s+)?(?<!(?<!\\)\\)(\\[,;:!])\s*")
-
-
-def _keep_space_after_macros(tex: str) -> str:
-    tex = _SPACE_AROUND_SPACING_MACRO.sub(r"\1", tex)
-    tex = _SPACED_COLON.sub(
-        lambda m: "\\colon" + ("\\ " + m.group("next") if m.group("next") else ""), tex
-    )
-    return _SPACED_MACRO.sub(lambda m: m.group(0) + "{}", tex)
-
-
-# Unicode has no dedicated subscript/superscript glyph for every character --
-# notably missing: b,c,d,f,g,q,w,y,z and every uppercase letter (subscript),
-# C,F,Q,S,X,Y,Z (superscript), and any Greek letter (either script). These
-# maps cover exactly what exists.
-_SUB_MAP = {
-    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-    "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ", "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ",
-    "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ", "v": "ᵥ", "x": "ₓ",
-}
-_SUP_MAP = {
-    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-    "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ", "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "i": "ⁱ", "j": "ʲ",
-    "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "n": "ⁿ", "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
-    "v": "ᵛ", "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
-    "A": "ᴬ", "B": "ᴮ", "D": "ᴰ", "E": "ᴱ", "G": "ᴳ", "H": "ᴴ", "I": "ᴵ", "J": "ᴶ", "K": "ᴷ", "L": "ᴸ",
-    "M": "ᴹ", "N": "ᴺ", "O": "ᴼ", "P": "ᴾ", "R": "ᴿ", "T": "ᵀ", "U": "ᵁ", "V": "ⱽ", "W": "ᵂ",
-}
-# Superscript contents with a dedicated character of their own.
-_SUP_SYMBOLS = {"\\top": "ᵀ", "\\circ": "°", "\\prime": "′", "'": "′"}
-
-# One source token: a control word ('\alpha'), a control symbol ('\_',
-# '\\', '\{'), or a single character.
-_TOKEN = re.compile(r"\\[A-Za-z]+|\\.|.", re.DOTALL)
-# A script's content that reads unambiguously without parentheses: one run
-# of letters/digits, one macro, one font/accent macro whose argument is
-# itself one plain run or macro ('\mathbf{x}', '\hat{x}', '\text{max}',
-# '\boldsymbol{\theta}' -- not '\substack{i<j \\ k}'), primes, '*', or a
-# single character.
-_SIMPLE_SCRIPT = re.compile(
-    r"[A-Za-z0-9]+|\\[A-Za-z]+|\\[A-Za-z]+\s*\{\s*(?:[A-Za-z0-9 ]+|\\[A-Za-z]+)\s*\}"
-    r"|(?:\\prime|')+|\\ast|\*|.",
-    re.DOTALL,
-)
-_BARE_SCRIPT_CHARS = set("0123456789+-=()") | set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-
-def _scriptify(content: str, mapping: dict[str, str]) -> str | None:
-    """Convert content to true Unicode sub/superscript chars if every
-    non-space character has one; None if not (no partial conversions: 'phy'
-    never becomes 'ₚhy'). Spaces are OCR artifacts here: '^{n + 1}' -> 'ⁿ⁺¹'."""
-    chars = "".join(content.split())
-    if not chars or any(c not in mapping for c in chars):
-        return None
-    return "".join(mapping[c] for c in chars)
-
-
-def _matching_brace(tex: str, start: int) -> int | None:
-    """Index of the '}' closing the '{' at start, skipping escaped braces;
-    None if it's never closed (truncated input)."""
-    depth = 0
-    for m in _TOKEN.finditer(tex, start):
-        token = m.group()
-        if token == "{":
-            depth += 1
-        elif token == "}":
-            depth -= 1
-            if depth == 0:
-                return m.start()
-    return None
-
-
-def _is_parenthesized(content: str) -> bool:
-    """Whether content is one '(...)' / '\\left(...\\right)' unit already,
-    possibly inside one font macro ('\\mathrm{(train)}')."""
-    inner = content.strip()
-    font = re.fullmatch(r"\\[A-Za-z]+\s*\{(.*)\}", inner, re.DOTALL)
-    if font and _matching_brace(inner, inner.index("{")) == len(inner) - 1:
-        inner = font.group(1).strip()
-    if inner.startswith("\\left(") and inner.endswith("\\right)"):
-        inner = "(" + inner[len("\\left(") : -len("\\right)")] + ")"
-    if not (inner.startswith("(") and inner.endswith(")")):
-        return False
-    depth = 0
-    for i, c in enumerate(inner):
-        depth += {"(": 1, ")": -1}.get(c, 0)
-        if depth == 0 and i < len(inner) - 1:
-            return False  # '(a)(b)': the first ')' closes before the end
-    return depth == 0
-
-
-def _script(marker: str, content: str) -> str | None:
-    """The replacement for marker + '{content}' (content already processed),
-    or None to leave it for pylatexenc as is."""
-    stripped = content.strip()
-    if marker == "^":
-        primes = re.fullmatch(r"(?:\\prime|')+", stripped)
-        if primes:
-            count = len(re.findall(r"\\prime|'", stripped))
-            return {1: "′", 2: "″", 3: "‴"}.get(count, "′" * count)
-        if stripped in _SUP_SYMBOLS:
-            return _SUP_SYMBOLS[stripped]
-    if "\\" not in content and "{" not in content:
-        converted = _scriptify(content, _SUB_MAP if marker == "_" else _SUP_MAP)
-        if converted is not None:
-            return converted
-    if not stripped or _SIMPLE_SCRIPT.fullmatch(stripped) or _is_parenthesized(stripped):
-        return None
-    # Not representable and more than one token: parenthesize, as plain-text
-    # math does ('x^(iⱼ)', 'e^(-x²)'), or '^' binds only the first token to
-    # the eye ('x^i_j' reads as x^i with a subscript j).
-    return f"{marker}{{({stripped})}}"
-
-
-def _unicode_scripts(tex: str) -> str:
-    """Rewrite every '_'/'^' script, innermost first:
-
-    - fully representable content -> true Unicode sub/superscript characters
-      ('_{int}' -> 'ᵢₙₜ', '^{n + 1}' -> 'ⁿ⁺¹'), and primes, '\\\\top' and
-      '\\\\circ' to their own characters ('f^{\\\\prime}' -> 'f′');
-    - otherwise, content that is more than one simple token is wrapped in
-      parentheses ('x^{i_j}' -> 'x^(iⱼ)'), since pylatexenc just prints the
-      marker and the content;
-    - otherwise (one token: '^{T}'... 'u_{phy}', 'L_{\\\\Theta}') left to pylatexenc.
-
-    Every braced group is processed, not only scripts, so scripts inside
-    '\\\\frac{...}' or '\\\\sqrt{...}' are reached too; macro arguments are never
-    taken for scripts. The escaped '\\\\_' and the accent '\\\\^' aren't markers,
-    and a '{' that's never closed is left as it is.
-
-    A macro name immediately followed by substituted Unicode characters
-    ('\\\\sum_{i=1}' -> '\\\\sumᵢ₌₁') would glue onto it -- pylatexenc would read
-    one unknown macro and drop the \\\\sum -- so a protecting space goes between.
-    """
-    out: list[str] = []
-    after_control_word = False
-    pos = 0
-    while pos < len(tex):
-        token = _TOKEN.match(tex, pos).group()
-        if token == "{":
-            close = _matching_brace(tex, pos)
-            if close is None:
-                out.append(token)
-                pos += 1
-                after_control_word = False
+from itertools import groupby
+
+from latex2mathml.converter import convert_to_element
+
+# Unicode's sub/superscript characters; a script uses them only if all have one.
+_SUB = dict(zip("0123456789+-−=()aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ", strict=True))
+_SUP = dict(zip("0123456789+-−=()abcdefghijklmnoprstuvwxyzABDEGHIJKLMNOPRTUVW∘",  # raised ∘ is a degree
+                "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂ°", strict=True))
+_RAISED = set("′″‴°*")  # already raised: appended as they are
+# Marks over/under a base -> combining characters ("" for braces: dropped).
+_ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "̃", "˜": "̃", "˙": "̇", "¨": "̈",
+            "→": "⃗", "ˇ": "̌", "˘": "̆", "⏟": "", "⏞": "", "︸": "", "︷": ""}
+_RELATION = tuple("=<>≤≥≈≡∼→⇒⟹≠∈")  # a table cell starting with one continues an alignment
+
+
+def _tag(node) -> str:
+    return node.tag.rsplit("}", 1)[-1]
+
+
+def _group(text: str) -> str:
+    """Parenthesize text that isn't one character, one word or one (...)."""
+    word = all(unicodedata.category(c) in ("Lu", "Ll", "Lo", "Nd", "Mn") for c in text)
+    return text if word or len(text) == 1 or re.fullmatch(r"\(.*\)", text) else f"({text})"
+
+
+def _script(base: str, text: str, marker: str) -> str:
+    table, chars = (_SUB if marker == "_" else _SUP), text.replace(" ", "")
+    if chars and all(c in table for c in chars):
+        return base + "".join(table[c] for c in chars)
+    if chars and marker == "^" and set(chars) <= _RAISED:
+        return base + chars
+    return f"{base}{marker}{_group(text)}" if chars else base
+
+
+def _upright_word(node) -> str | None:
+    """Letters of an upright identifier or a group of them ('\\mathrm{if}')."""
+    if _tag(node) == "mi" and node.get("mathvariant") == "normal" and (node.text or "").isalpha():
+        return node.text
+    letters = [_upright_word(c) for c in node] if _tag(node) in ("mrow", "mstyle") else []
+    return "".join(letters) if letters and all(letters) else None
+
+
+def _render(node) -> str:
+    tag, kids, text = _tag(node), list(node), html.unescape(node.text or "")
+    if tag == "mtext":
+        return re.sub(r"\\([_$%&#{}])", r"\1", text)
+    if tag in ("mi", "mn", "mo", "ms"):
+        return text.lstrip("\\")  # an unknown macro prints its name, never nothing
+    if tag in ("mspace", "mphantom"):
+        return " " if tag == "mspace" else ""
+    if tag in ("msub", "msup", "munder", "mover") and len(kids) == 2:
+        base, over = _render(kids[0]), _render(kids[1])
+        if tag in ("munder", "mover") and over.strip() in _ACCENTS:
+            mark = _ACCENTS[over.strip()]
+            return "".join(c + mark for c in base) if mark and 0 < len(base) <= 3 and base.isalnum() else base
+        return _script(_group(base), over, "_" if tag in ("msub", "munder") else "^")
+    if tag in ("msubsup", "munderover") and len(kids) == 3:
+        return _script(_script(_group(_render(kids[0])), _render(kids[1]), "_"), _render(kids[2]), "^")
+    if tag == "mfrac" and len(kids) == 2:
+        top, bottom = _render(kids[0]), _render(kids[1])
+        return f"{top}; {bottom}" if node.get("linethickness") == "0" else f"{_group(top)}/{_group(bottom)}"
+    if tag == "msqrt":
+        return "√" + _group(_render_row(kids))
+    if tag == "mroot" and len(kids) == 2:
+        return _script("", _render(kids[1]), "^") + "√" + _group(_render(kids[0]))
+    if tag == "mtable":
+        return "; ".join(_cells([_render_row(list(td)) for td in tr]) for tr in kids)
+    return _render_row(kids)
+
+
+def _cells(cells: list[str]) -> str:
+    """Cells joined by ', ' -- a space if one continues an alignment ('= b') or follows punctuation."""
+    out = ""
+    for cell in filter(None, cells):
+        out += (" " if cell.startswith(_RELATION) or out[-1] in ",;:" else ", ") + cell if out else cell
+    return out
+
+
+def _render_row(kids) -> str:
+    """'&' is just an alignment point; rows (line breaks) are joined by '; ': one line."""
+    rows: list[list[tuple[str, str]]] = [[]]
+    for upright, run in groupby(kids, key=lambda k: _upright_word(k) is not None):
+        if upright:  # a run of upright letters ('\mathrm{if}') is one word
+            letters = "".join(map(_upright_word, run))
+            rows[-1].append(("word" if len(letters) > 1 else "", letters))
+            continue
+        for k in run:
+            tag, text = _tag(k), _render(k)
+            if tag == "mspace" and k.get("linebreak") == "newline":
+                rows.append([])
+            elif tag == "mi" and k.text == "&":
                 continue
-            out.append("{" + _unicode_scripts(tex[pos + 1 : close]) + "}")
-            pos = close + 1
-            after_control_word = False
-            continue
-        if token in ("_", "^"):
-            nxt = tex[pos + 1 : pos + 2]
-            replacement = None
-            end = pos + 1
-            if nxt == "{" and (close := _matching_brace(tex, pos + 1)) is not None:
-                content = _unicode_scripts(tex[pos + 2 : close])
-                replacement = _script(token, content)
-                if replacement is None:
-                    replacement = f"{token}{{{content}}}"
-                end = close + 1
-            elif nxt in _BARE_SCRIPT_CHARS or nxt == "'":
-                mapping = _SUB_MAP if token == "_" else _SUP_MAP
-                replacement = mapping.get(nxt)
-                if replacement is None and token == "^" and nxt == "'":
-                    replacement = "′"
-                if replacement is None:
-                    replacement = token + nxt
-                end = pos + 2
-            if replacement is None:
-                replacement, end = token, pos + 1
-            unicode_start = not replacement.startswith(("_", "^"))
-            if after_control_word and unicode_start:
-                out.append(" ")
-            out.append(replacement)
-            pos = end
-            after_control_word = False
-            continue
-        out.append(token)
-        pos += len(token)
-        after_control_word = token.startswith("\\") and token[1:].isalpha()
-    return "".join(out)
+            elif (tag in ("mo", "mi") and len(text) > 1 and text.isalpha() and not k.get("mathvariant")) \
+                    or (tag in ("msub", "msubsup", "munder", "munderover")
+                        and (_tag(k[0]) == "mo" or len(_upright_word(k[0]) or "") > 1)):
+                rows[-1].append(("word", text))  # sin, det, ∑ᵢ₌₁ⁿ, lim_(n → ∞), argminₓ
+            else:
+                rows[-1].append(("op" if tag == "mo" and text else "", text))
+    return "; ".join(line for line in map(_join, rows) if line)
+
+
+def _join(parts: list[tuple[str, str]]) -> str:
+    """MathML's form rule: an operator after an operand is infix (spaced), else prefix (tight)."""
+    out, operand, bars, last = "", False, 0, ""
+    for kind, text in parts:
+        category = unicodedata.category(text[0]) if text else ""  # '\\right.' is an empty operator
+        opening = category == "Ps" or (text in ("|", "‖") and bars % 2 == 0)
+        if kind == "op" and text in ",;":
+            out, operand = out.rstrip() + text + " ", False
+        elif kind == "op" and opening:
+            out, operand = (out.rstrip() if last == "word" and text in "([" else out) + text, False
+        elif kind == "op" and (category == "Pe" or text in ("|", "‖")):
+            out, operand = out.rstrip() + text, True
+        elif kind == "op":
+            out, operand = (out.rstrip() + f" {text} ", False) if operand else (out + text, False)
+        elif kind == "word":  # spaced from an operand or word before it, not from '(' or a prefix '−'
+            gap = " " if (operand or last == "word") and not out.endswith(" ") else ""
+            out, operand = out + gap + text + " ", False
+        else:
+            out, operand = out + text, True
+        bars += kind == "op" and text in ("|", "‖")
+        last = kind
+    return re.sub(r"\s+", " ", out).strip()
 
 
 _PROSE_WORD = re.compile(r"[A-Za-z]{2,}")
+_SYNTAX_PLACEHOLDER = re.compile(r"\s*(?:\.+|…)\s*")  # '$...$' in text *about* math syntax
 
 
 def _looks_like_prose(content: str) -> bool:
-    """Guard against $...$ span detection (both this package's own
-    convert_math_spans and, confirmed directly via treesitter, tree-sitter-
-    markdown's own inline-math grammar) pairing the first '$' with
-    whichever '$' comes next, regardless of what's between them -- e.g.
-    "costs $50 ... $100" gets read as one math span "50 ... $100"->"50 ...".
-    Real LaTeX almost always has a macro (backslash) or a sub/superscript
-    marker. Without either, the span is prose if it has 3+ words, or if it
-    starts with a number and has any word -- currency: 'costs $5 and $10'
-    pairs up as '5 and' (no real math in the paper library looks like that)."""
+    """Currency paired as math ('$5 and $10' -> '5 and'): no LaTeX, and 3+ words or number + word."""
     if "\\" in content or "_" in content or "^" in content:
         return False
     words = _PROSE_WORD.findall(content)
     return len(words) >= 3 or (bool(words) and content.lstrip()[:1].isdigit())
 
 
-# A body of only dots: '$...$' in text *about* math syntax ('## Inline math
-# ($...$)'), not math -- converted, the '$'s would vanish.
-_SYNTAX_PLACEHOLDER = re.compile(r"\s*(?:\.+|…)\s*")
-
-
 def latex_to_unicode(tex: str) -> str:
-    """Convert one bare LaTeX math expression (no $ delimiters) to a
-    readable Unicode approximation. Falls back to the original text on any
-    parse failure rather than raising, so one malformed expression never
-    breaks a larger document/answer being converted.
-
-    Input that looks like prose rather than math (see _looks_like_prose)
-    comes back wrapped in '$...$': it's taken to be two currency amounts a
-    caller -- or tree-sitter-markdown, for the CLI -- paired and stripped by
-    mistake. The closing '$' is then really the next amount's sign, which
-    follows a space in running text, so the space the caller trimmed is put
-    back: 'Costs $5 and $10' pairs as '5 and' -> '$5 and $'."""
+    """One LaTeX expression -> one line of Unicode; what doesn't parse comes
+    back as it was. Prose comes back in '$...$', with the space before the
+    closing '$' (the next amount's sign) put back: '5 and' -> '$5 and $'."""
     try:
         if _SYNTAX_PLACEHOLDER.fullmatch(tex):
             return f"${tex}$"
-        if _looks_like_prose(tex):
-            # Restore the $ signs a caller (or tree-sitter-markdown) already
-            # stripped, so the display ends up identical to the untouched
-            # original text instead of silently losing the currency marks.
-            return f"${tex.strip()} $"
-        return _convert(tex)
+        return f"${tex.strip()} $" if _looks_like_prose(tex) else _convert(tex)
     except Exception:
         return tex
 
 
 def _convert(tex: str) -> str:
-    """The conversion pipeline without the prose guard or the fallback, for
-    callers that apply both themselves."""
-    tex = _join_source_lines(tex)
-    tex = _drop_math_font_spaces(tex)
-    tex = _normalize_math_spacing(tex)
-    tex = _keep_space_after_macros(tex)
-    tex = _unicode_scripts(tex)
-    # A fresh LatexNodes2Text per call, not a shared one: inside math nodes it
-    # temporarily overwrites its own strict_latex_spaces, so concurrent calls
-    # on one instance can leave it permanently wrong.
-    converter = LatexNodes2Text(latex_context=_CONTEXT_DB)
-    return _join_rows(converter.latex_to_text(tex, latex_context=_PARSE_DB))
+    return unicodedata.normalize("NFC", re.sub(r"\s+", " ", _render(convert_to_element(tex))).strip())
 
 
-# Math spans, tried in order at each position. '\x01' is excluded from span
-# bodies so a span never reaches into a masked code region (see _mask_code).
+# $$...$$, or $...$ on one line: a body starting with a digit must be tight
+# and not followed by a digit (currency '$5 or $6' never pairs); any other
+# may be padded, as OCR writes it. '\x01' marks masked code.
 _MATH_SPAN = re.compile(
-    # $$...$$ display math, possibly multi-line.
     r"(?<!\\)\$\$(?P<display>[^\x01]+?)(?<!\\)\$\$"
-    # $...$ inline math by Pandoc's rule: no whitespace just inside either
-    # '$', and -- when the body starts with a digit, as currency does -- the
-    # closing '$' not followed by a digit, so '$5-$10' never pairs up while
-    # '$\pm$0.26' still does.
-    r"|(?<!\\)\$(?=(?P<num>\d)?)(?P<inline>(?=[^\s$])[^\n$\x01]*?[^\s\\$\x01])\$(?(num)(?!\d))"
-    # ...or whitespace just inside the opening '$', as OCR tools (e.g. MinerU)
-    # write inline spans: '$ r $', '$ x _ {i} $', sometimes '$ t\in[0,1]$'.
-    # A currency '$' is followed by the amount, never by a space.
-    r"|(?<!\\)\$[ \t]+(?P<padded>[^\s$\x01](?:[^\n$\x01]*?[^\s\\$\x01])?)[ \t]*\$"
-    # ...or whitespace just inside the closing '$' only ('$(x) \to y $'),
-    # accepted only when the body is clearly LaTeX: prose like '$5 or $' can
-    # look just like this.
-    r"|(?<!\\)\$(?P<tail>(?=[^\s$\d])(?=[^\n$\x01]*?(?:\\[A-Za-z]|[_^]\{))[^\n$\x01]*?[^\s\\$\x01])[ \t]+\$"
-)
-
-# What may precede a fence on its line: any indentation, and list-item or
-# blockquote markers ('1. ```bash', '> ```'). The goal is masking, not
-# rendering, so this is looser than CommonMark's 0-3 spaces.
-_FENCE_OPEN_PREFIX = r"[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>[ \t]?)*"
-_FENCE_CLOSE_PREFIX = r"[ \t]*(?:>[ \t]?)*"
-
-# A fenced code block: opened by 3+ backticks or tildes (a backtick fence's
-# info string can't itself contain a backtick -- '```ls``' on one line is an
-# inline code span, not a fence), closed by a fence of the same character at
-# least as long, or running to the end of the text if unclosed. Lines may end
-# in CRLF.
+    r"|(?<!\\)\$(?:(?P<num>\d(?:[^\n$\x01]*?[^\s\\$\x01])?)\$(?!\d)"
+    r"|(?P<inline>(?=[^\n$\x01]*?[^\s$\x01])[^\n$\d\x01][^\n$\x01]*?)(?<!\\)\$)")
+# A fence may follow indentation and list/blockquote markers ('1. ```bash').
 _FENCED_CODE = re.compile(
-    rf"^{_FENCE_OPEN_PREFIX}(?P<fence>(?P<bt>`{{3,}})(?=[^`\n]*$)|~{{3,}}).*?"
-    rf"(?:^{_FENCE_CLOSE_PREFIX}(?P=fence)(?(bt)`*|~*)[ \t]*\r?$|\Z)",
-    flags=re.MULTILINE | re.DOTALL,
-)
-_BACKTICKS = re.compile(r"`+")
-_BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
-_CODE_PLACEHOLDER = re.compile(r"\x01(\d+)\x01")
-
-
-def _code_span_ranges(text: str) -> list[tuple[int, int]]:
-    """(start, end) of each inline code span: a backtick run closed by the
-    next run of the same length in the same paragraph (CommonMark). A linear
-    scan -- the equivalent regex backtracks badly on many unmatched runs."""
-    runs = [(m.start(), m.end()) for m in _BACKTICKS.finditer(text)]
-    later_runs: defaultdict[int, deque[int]] = defaultdict(deque)
-    for i, (start, end) in enumerate(runs):
-        later_runs[end - start].append(i)
-    breaks = [m.start() for m in _BLANK_LINE.finditer(text)]
-    spans = []
-    i = 0
-    while i < len(runs):
-        start, end = runs[i]
-        same_length = later_runs[end - start]
-        while same_length and same_length[0] <= i:
-            same_length.popleft()
-        if same_length:
-            j = same_length[0]
-            k = bisect_left(breaks, end)
-            if k == len(breaks) or breaks[k] >= runs[j][0]:
-                spans.append((start, runs[j][1]))
-                i = j + 1
-                continue
-        i += 1  # no closer in this paragraph: a literal backtick run
-    return spans
+    r"^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>[ \t]?)*(?P<fence>(?P<bt>`{3,})(?=[^`\n]*$)|~{3,}).*?"
+    r"(?:^[ \t]*(?:>[ \t]?)*(?P=fence)(?(bt)`*|~*)[ \t]*\r?$|\Z)", re.MULTILINE | re.DOTALL)
 
 
 def _mask_code(text: str, saved: list[str]) -> str:
-    """Replace Markdown code, whose '$'s are never math, with '\x01N\x01'
-    placeholders (originals appended to saved). Text that already contains
-    '\x01' is returned unmasked, since its placeholders would be ambiguous."""
-    if "\x01" in text:
+    """Code's '$'s aren't math: fences, then `...` spans (a backtick run closed by
+    the next equal run in its paragraph; a linear scan) become '\x01N\x01'."""
+    if "\x01" in text:  # the sentinel is already there: masking would be ambiguous
         return text
 
-    def _mask(code: str) -> str:
+    def keep(code: str) -> str:
         saved.append(code)
         return f"\x01{len(saved) - 1}\x01"
 
-    text = _FENCED_CODE.sub(lambda m: _mask(m.group(0)), text)
-    out = []
-    pos = 0
-    for start, end in _code_span_ranges(text):
-        out.append(text[pos:start])
-        out.append(_mask(text[start:end]))
-        pos = end
-    out.append(text[pos:])
-    return "".join(out)
+    text = _FENCED_CODE.sub(lambda m: keep(m.group(0)), text)
+    runs = [m.span() for m in re.finditer(r"`+", text)]
+    later: defaultdict[int, deque[int]] = defaultdict(deque)
+    for i, (start, end) in enumerate(runs):
+        later[end - start].append(i)
+    breaks = [m.start() for m in re.finditer(r"\n[ \t\r]*\n", text)]
+    parts, pos, i = [], 0, 0
+    while i < len(runs):
+        start, end = runs[i]
+        same = later[end - start]
+        while same and same[0] <= i:
+            same.popleft()
+        k = bisect_left(breaks, end)
+        if same and (k == len(breaks) or breaks[k] >= runs[same[0]][0]):
+            parts += [text[pos:start], keep(text[start : runs[same[0]][1]])]
+            pos, i = runs[same[0]][1], same[0] + 1
+        else:
+            i += 1
+    return "".join(parts) + text[pos:]
+
+
+def _unmask(text: str, saved: list[str]) -> str:
+    return re.sub(r"\x01(\d+)\x01", lambda m: saved[int(m.group(1))], text) if saved else text
 
 
 def convert_math_spans(text: str) -> str:
-    """Find $...$/$$...$$ spans in a larger text and convert each in place.
-
-    $$...$$ may span multiple lines (display equations do); $...$ is
-    restricted to one line -- real inline math never spans a paragraph
-    break, but two unrelated dollar amounts in the same paragraph
-    ("costs $50 ... $100") easily could, and matching across them would
-    feed nonsense into the converter instead of failing loudly. Within a
-    line, $...$ follows Pandoc's rule, or is padded with spaces the way OCR
-    output writes it (see _MATH_SPAN for the exact rules).
-
-    A '$' escaped as '\\$' (the standard Markdown escape for a literal dollar)
-    never opens or closes a span -- the '(?<!\\)' guards keep escaped currency
-    like "\\$5 ... \\$10" from being read as one span and mangled. Nor does a
-    '$' inside Markdown code (`...` spans, ```/~~~ fences), e.g. `echo $HOME`.
-    """
+    """Convert each $...$/$$...$$ span of Markdown in place, leaving escaped
+    '\\$', code, prose, syntax placeholders and unparsable spans as written."""
     saved: list[str] = []
-    text = _mask_code(text, saved)
-    out: list[str] = []
-    pos = 0
+    text, out, pos = _mask_code(text, saved), [], 0
     while m := _MATH_SPAN.search(text, pos):
-        content = m.group("display") or m.group("inline") or m.group("padded") or m.group("tail")
+        content = m.group("display") or m.group("num") or m.group("inline")
         placeholder = _SYNTAX_PLACEHOLDER.fullmatch(content)
         if placeholder or _looks_like_prose(content):
-            # Not math, so leave it. A prose match is left only up to its
-            # opening '$': its closing '$' may open a real span ('The $ sign
-            # is common, $x$ is not'), so the search resumes right there. A
-            # display span's or a syntax placeholder's closing '$' really
-            # closes it.
-            whole = placeholder or m.group("display") is not None
-            resume = m.end() if whole else m.start() + 1
-            out.append(text[pos:resume])
-            pos = resume
+            # prose keeps only its opening '$': the closing one may open a real span
+            resume = m.end() if placeholder or m.group("display") else m.start() + 1
+            out, pos = out + [text[pos:resume]], resume
             continue
         try:
-            converted = _convert(content.strip())
+            converted = _convert(content)
         except Exception:
-            # Leave the span exactly as written, delimiters included.
             converted = m.group(0)
-        out.append(text[pos : m.start()])
-        out.append(converted)
-        pos = m.end()
-    out.append(text[pos:])
-    text = "".join(out)
-    if not saved:
-        return text
-    return _CODE_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], text)
+        out, pos = out + [text[pos : m.start()], converted], m.end()
+    return _unmask("".join(out) + text[pos:], saved)
 
 
-_BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
-
-
-def _fenced_lines(text: str, line_count: int) -> list[bool]:
-    """For each '\\n'-separated line, whether it's part of a fenced code
-    block -- the same fences convert_math_spans masks (_FENCED_CODE)."""
-    in_code = [False] * line_count
-    line, pos = 0, 0  # line number at text offset pos, counted incrementally
-    for m in _FENCED_CODE.finditer(text):
-        line += text.count("\n", pos, m.start())
-        first = line
-        line += text.count("\n", m.start(), m.end())
-        pos = m.end()
-        for k in range(first, min(line, line_count - 1) + 1):
-            in_code[k] = True
-    return in_code
+# A bare '$$' line, content lines, a bare '$$' line (a CRLF ending in group 3).
+_DISPLAY_BLOCK = re.compile(
+    r"^([ \t]*)\$\$[ \t]*\r?\n((?:(?![ \t]*\$\$[ \t]*\r?$).*\n)*?)[ \t]*\$\$[ \t]*(\r?)$", re.MULTILINE)
+_TEX_COMMENT = re.compile(r"(?<!(?<!\\)\\)%")  # '\%' is a percent sign; '\\%' a comment
 
 
 def collapse_math_blocks(text: str) -> str:
-    """Collapse $$ / content / $$ blocks (a bare '$$' line, one or more
-    content lines, another bare '$$' line) into a single line
-    '$$ content $$'.
+    """Each $$ / content / $$ block onto one line (render-markdown.nvim conceals only one-line
+    source), keeping indentation and CRLF; blocks in code, empty, or with a '%' comment stay."""
 
-    Some Markdown renderers (confirmed directly for render-markdown.nvim's
-    LaTeX handler: position="center" is the only mode that actually conceals
-    the raw source, and it's silently overridden to a non-concealing mode
-    whenever the equation's node spans more than one buffer line) only hide
-    the raw $$...$$ source and show the rendered replacement when the
-    equation is written on a single source line. A multi-line block, even
-    though it's the same equation, ends up showing both the raw text and
-    the render side by side with no config fix available -- rewriting it
-    onto one line is the only way to get concealment for that equation.
+    def one_line(m: re.Match[str]) -> str:
+        content = [c.strip() for c in m.group(2).split("\n") if c.strip()]
+        if not content or any(_TEX_COMMENT.search(c) for c in content):
+            return m.group(0)
+        return f"{m.group(1)}$$ {' '.join(content)} $${m.group(3)}"
 
-    The collapsed line keeps the opening '$$' line's indentation (so a block
-    inside a list item stays in it) and its CRLF ending, if any. Blank content
-    lines are dropped. Left unchanged: blocks inside fenced code, blocks with
-    no closing '$$' (one inside a later code fence doesn't count), empty
-    blocks, and blocks with a '%' comment -- joining their lines would
-    comment out the rest of the equation.
-    """
-    lines = text.split("\n")
-    in_code = _fenced_lines(text, len(lines))
-    result: list[str] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not in_code[i] and (opener := _BARE_DOLLARS_LINE.match(line)):
-            j = i + 1
-            while j < len(lines) and not in_code[j] and not _BARE_DOLLARS_LINE.match(lines[j]):
-                j += 1
-            if j < len(lines) and not in_code[j]:
-                content = [c.strip() for c in lines[i + 1 : j] if c.strip()]
-                if content and not any(_TEX_COMMENT.search(c) for c in content):
-                    eol = "\r" if lines[j].endswith("\r") else ""
-                    result.append(f"{opener.group(1)}$$ {' '.join(content)} $${eol}")
-                else:
-                    result.extend(lines[i : j + 1])
-                i = j + 1
-                continue
-        result.append(line)
-        i += 1
-    return "\n".join(result)
+    saved: list[str] = []
+    return _unmask(_DISPLAY_BLOCK.sub(one_line, _mask_code(text, saved)), saved)
