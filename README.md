@@ -38,12 +38,19 @@ arguments) so it's usable in-process by other tools (e.g.
 drop-in shell-command `converter` for tools like
 [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim).
 
+Requires Python 3.12+ and pylatexenc 2.x. Used by
+[papis-ask](https://github.com/FarhadManiCodes/papis-ask) (`convert_math_spans`
+on answers), paper-refinery (`collapse_math_blocks` on its review `.md`) and
+render-markdown.nvim (the two CLIs). The public API is the three functions
+below; everything else is private.
+
 ```python
 from mathunicode import latex_to_unicode, convert_math_spans, collapse_math_blocks
 
 latex_to_unicode(r"\det(A) = 0")     # "det(A) = 0"
 latex_to_unicode(r"x_{i}")           # "xᵢ"
 latex_to_unicode(r"u_{phy}")         # "u_phy" -- 'y' has no subscript form, not partial
+latex_to_unicode("costs 5 and more words")  # "$costs 5 and more words$" -- prose: '$'s restored
 
 convert_math_spans("costs $50 to train, compared to $100 for the baseline.")
 # unchanged -- not mistaken for math despite the two $ signs
@@ -68,6 +75,9 @@ collapse_math_blocks("before\n$$\nx_{i}\n$$\nafter")
   Blocks inside fenced code, blocks with a `%` comment (joining the lines
   would comment out the rest of the equation), and unclosed or empty blocks
   are left unchanged; the collapsed line keeps the block's indentation.
+
+Both read and write UTF-8 whatever the locale, and take only `--help` /
+`--version`. `mathunicode-collapse-blocks` keeps CRLF line endings.
 
 ## Tests
 

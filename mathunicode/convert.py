@@ -1,11 +1,22 @@
 """LaTeX -> readable Unicode approximation, built on pylatexenc.
 
-pylatexenc's default macro table silently drops or mishandles a handful of
-common math macros -- not cosmetically, but as real content loss (e.g.
-``\\|x\\|^2`` becomes ``x^2``, losing the norm entirely; ``\\det(A)`` becomes
-``(A)``, losing the operator name). The fixes below were found by
-systematically testing every macro that actually appears across a real paper
-library (149 unique macro names), not guessed.
+Three layers, top to bottom:
+
+1. pylatexenc context: pylatexenc's default macro table silently drops or
+   mishandles many math macros -- real content loss, not cosmetics
+   (``\\|x\\|^2`` -> ``x^2``, ``\\det(A)`` -> ``(A)``, ``\\frac{a}`` ->
+   ``%s/%sa``). The fixes were found by running every macro used across a
+   real paper library through the converter, not guessed.
+2. One expression (``latex_to_unicode``): pre-passes on the LaTeX source for
+   what pylatexenc can't do -- undo OCR spacing, keep the space after
+   operators and relations, real Unicode sub/superscripts -- then
+   pylatexenc.
+3. A Markdown document (``convert_math_spans``, ``collapse_math_blocks``):
+   finding the math -- which '$'s pair up, skipping code -- and converting
+   or collapsing it in place.
+
+Public API: the three functions above (re-exported by the package). The
+rest is private and may change.
 """
 
 import re
@@ -404,7 +415,13 @@ def latex_to_unicode(tex: str) -> str:
     """Convert one bare LaTeX math expression (no $ delimiters) to a
     readable Unicode approximation. Falls back to the original text on any
     parse failure rather than raising, so one malformed expression never
-    breaks a larger document/answer being converted."""
+    breaks a larger document/answer being converted.
+
+    Input that looks like prose rather than math (3+ words, no macro or
+    sub/superscript) comes back wrapped in '$...$': it's taken to be two
+    currency amounts a caller -- or tree-sitter-markdown, for the CLI --
+    paired and stripped by mistake ('costs 5 and more words' ->
+    '$costs 5 and more words$')."""
     try:
         if _looks_like_prose(tex):
             # Restore the $ signs a caller (or tree-sitter-markdown) already
