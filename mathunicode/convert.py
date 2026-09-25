@@ -633,6 +633,11 @@ def _looks_like_prose(content: str) -> bool:
     return len(words) >= 3 or (bool(words) and content.lstrip()[:1].isdigit())
 
 
+# A body of only dots: '$...$' in text *about* math syntax ('## Inline math
+# ($...$)'), not math -- converted, the '$'s would vanish.
+_SYNTAX_PLACEHOLDER = re.compile(r"\s*(?:\.+|…)\s*")
+
+
 def latex_to_unicode(tex: str) -> str:
     """Convert one bare LaTeX math expression (no $ delimiters) to a
     readable Unicode approximation. Falls back to the original text on any
@@ -646,6 +651,8 @@ def latex_to_unicode(tex: str) -> str:
     follows a space in running text, so the space the caller trimmed is put
     back: 'Costs $5 and $10' pairs as '5 and' -> '$5 and $'."""
     try:
+        if _SYNTAX_PLACEHOLDER.fullmatch(tex):
+            return f"${tex}$"
         if _looks_like_prose(tex):
             # Restore the $ signs a caller (or tree-sitter-markdown) already
             # stripped, so the display ends up identical to the untouched
@@ -782,11 +789,15 @@ def convert_math_spans(text: str) -> str:
     pos = 0
     while m := _MATH_SPAN.search(text, pos):
         content = m.group("display") or m.group("inline") or m.group("padded") or m.group("tail")
-        if _looks_like_prose(content):
-            # Not math, so leave it. An inline match is left only up to its
+        placeholder = _SYNTAX_PLACEHOLDER.fullmatch(content)
+        if placeholder or _looks_like_prose(content):
+            # Not math, so leave it. A prose match is left only up to its
             # opening '$': its closing '$' may open a real span ('The $ sign
-            # is common, $x$ is not'), so the search resumes right there.
-            resume = m.end() if m.group("display") is not None else m.start() + 1
+            # is common, $x$ is not'), so the search resumes right there. A
+            # display span's or a syntax placeholder's closing '$' really
+            # closes it.
+            whole = placeholder or m.group("display") is not None
+            resume = m.end() if whole else m.start() + 1
             out.append(text[pos:resume])
             pos = resume
             continue

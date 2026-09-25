@@ -825,3 +825,13 @@ def test_unbalanced_group_left_as_is():
 
 def test_parenthesized_font_argument_gets_no_second_pair():
     assert latex_to_unicode("x^{\\mathrm{(train)}}") == "x^(train)"
+
+
+def test_dots_only_span_is_syntax_not_math():
+    # '## Inline math ($...$)' rendered as '## Inline math (...)'.
+    assert latex_to_unicode("...") == "$...$"
+    text = "## Inline math ($...$) and ($$ ... $$), then $x_1$"
+    assert convert_math_spans(text) == "## Inline math ($...$) and ($$ ... $$), then x₁"
+    # Operators are real math.
+    assert latex_to_unicode("+") == "+"
+    assert latex_to_unicode("\\ldots") == "…"
