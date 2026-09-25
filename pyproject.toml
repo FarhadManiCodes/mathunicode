@@ -1,6 +1,6 @@
 [project]
 name = "mathunicode"
-version = "0.1.1"
+version = "0.2.0"
 description = "LaTeX -> readable Unicode approximation for terminals/editors, with fixes for macros pylatexenc silently drops or mishandles."
 readme = "README.md"
 requires-python = ">=3.12"
