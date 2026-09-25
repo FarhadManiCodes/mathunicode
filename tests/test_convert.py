@@ -634,3 +634,9 @@ def test_wide_accent_skips_scripted_arguments():
     assert latex_to_unicode("\\overline{x_1}") == "x₁"
     assert latex_to_unicode("\\overline{x^2}") == "x²"
     assert latex_to_unicode("\\overline{\\alpha}") == "α̅"
+
+
+def test_wide_accent_on_greek_and_bold_letters():
+    assert latex_to_unicode("\\overline{\\Delta r}") == "Δ̅r̅"
+    assert latex_to_unicode("\\widehat{\\mathbf{FL}}") == "𝐅̂𝐋̂"
+    assert latex_to_unicode("\\overline{x_i}") == "xᵢ"

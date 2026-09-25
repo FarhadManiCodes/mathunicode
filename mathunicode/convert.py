@@ -9,6 +9,7 @@ library (149 unique macro names), not guessed.
 """
 
 import re
+import unicodedata
 from bisect import bisect_left
 from collections import defaultdict, deque
 
@@ -65,14 +66,14 @@ def _labelled_arrow(arrow: str, label_first: bool):
 
 def _wide_accent(narrow_repl):
     """Text for a wide accent ('\\overline{AB}'), which pylatexenc drops: the
-    narrow accent's combining mark on each character ('A̅B̅') for a single
-    character or up to 3 ASCII letters/digits, else the plain argument -- a
-    mark on every character of a longer expression, spaces and scripts
-    included, is noise."""
+    narrow accent's combining mark on each character ('A̅B̅', 'Δ̅r̅') for up to 3
+    plain letters or digits, else the plain argument -- a mark on every
+    character of a longer expression is noise. Sub/superscript characters
+    ('₁', 'ⁿ', Unicode categories No/Lm) don't count as plain."""
 
     def repl(node, l2tobj) -> str:
         text = "".join(_arg_texts(node, l2tobj))
-        if len(text) == 1 or (0 < len(text) <= 3 and text.isascii() and text.isalnum()):
+        if 0 < len(text) <= 3 and all(unicodedata.category(c) in ("Lu", "Ll", "Nd") for c in text):
             return narrow_repl(node, l2tobj=l2tobj)
         return text
 
