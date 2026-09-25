@@ -64,7 +64,7 @@ def _cli(entry, stdin: bytes, *args, env=None):
     code = f"import sys; from mathunicode.cli import {entry}; sys.exit({entry}())"
     return subprocess.run(
         [sys.executable, "-c", code, *args],
-        input=stdin,
+        input=stdin, check=False,  # callers assert on the exit code
         capture_output=True,
         env={**os.environ, **(env or {})},
         timeout=30,
