@@ -441,8 +441,9 @@ def _keep_space_after_macros(tex: str) -> str:
 
 
 # Unicode has no dedicated subscript/superscript glyph for every character --
-# notably missing: b,c,d,f,g,q,w,y,z (subscript), any uppercase letter, and
-# any Greek letter (either script). These maps cover exactly what exists.
+# notably missing: b,c,d,f,g,q,w,y,z and every uppercase letter (subscript),
+# C,F,Q,S,X,Y,Z (superscript), and any Greek letter (either script). These
+# maps cover exactly what exists.
 _SUB_MAP = {
     "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
     "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
@@ -455,74 +456,162 @@ _SUP_MAP = {
     "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ", "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "i": "ⁱ", "j": "ʲ",
     "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "n": "ⁿ", "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
     "v": "ᵛ", "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
+    "A": "ᴬ", "B": "ᴮ", "D": "ᴰ", "E": "ᴱ", "G": "ᴳ", "H": "ᴴ", "I": "ᴵ", "J": "ᴶ", "K": "ᴷ", "L": "ᴸ",
+    "M": "ᴹ", "N": "ᴺ", "O": "ᴼ", "P": "ᴾ", "R": "ᴿ", "T": "ᵀ", "U": "ᵁ", "V": "ⱽ", "W": "ᵂ",
 }
+# Superscript contents with a dedicated character of their own.
+_SUP_SYMBOLS = {"\\top": "ᵀ", "\\circ": "°", "\\prime": "′", "'": "′"}
 
-
-# Script-marker patterns for _unicode_scripts. 'prefix' captures a bare macro
-# name immediately before the marker (see the protecting-space note there).
-_BRACED_SCRIPT = re.compile(rf"(?P<prefix>\\[a-zA-Z]+)?(?P<marker>{_MARKER})\{{(?P<content>[^{{}}]*)\}}")
-_BARE_SCRIPT = re.compile(rf"(?P<prefix>\\[a-zA-Z]+)?(?P<marker>{_MARKER})(?P<content>[0-9A-Za-z+\-=()])")
-_SCRIPT_GROUP = re.compile(rf"{_MARKER}\{{[^{{}}]*\}}")
-_MASK_PLACEHOLDER = re.compile(r"\x00(\d+)\x00")
+# One source token: a control word ('\alpha'), a control symbol ('\_',
+# '\\', '\{'), or a single character.
+_TOKEN = re.compile(r"\\[A-Za-z]+|\\.|.", re.DOTALL)
+# A script's content that reads unambiguously without parentheses: one run
+# of letters/digits, one macro, one font/accent macro whose argument is
+# itself one plain run or macro ('\mathbf{x}', '\hat{x}', '\text{max}',
+# '\boldsymbol{\theta}' -- not '\substack{i<j \\ k}'), primes, '*', or a
+# single character.
+_SIMPLE_SCRIPT = re.compile(
+    r"[A-Za-z0-9]+|\\[A-Za-z]+|\\[A-Za-z]+\s*\{\s*(?:[A-Za-z0-9 ]+|\\[A-Za-z]+)\s*\}"
+    r"|(?:\\prime|')+|\\ast|\*|.",
+    re.DOTALL,
+)
+_BARE_SCRIPT_CHARS = set("0123456789+-=()") | set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 def _scriptify(content: str, mapping: dict[str, str]) -> str | None:
     """Convert content to true Unicode sub/superscript chars if every
-    character has one; None if not (caller keeps the current '_word' text --
-    no partial conversions, e.g. 'phy' stays 'phy', never 'ₚhy')."""
-    if not content or any(c not in mapping for c in content):
+    non-space character has one; None if not (no partial conversions: 'phy'
+    never becomes 'ₚhy'). Spaces are OCR artifacts here: '^{n + 1}' -> 'ⁿ⁺¹'."""
+    chars = "".join(content.split())
+    if not chars or any(c not in mapping for c in chars):
         return None
-    return "".join(mapping[c] for c in content)
+    return "".join(mapping[c] for c in chars)
+
+
+def _matching_brace(tex: str, start: int) -> int | None:
+    """Index of the '}' closing the '{' at start, skipping escaped braces;
+    None if it's never closed (truncated input)."""
+    depth = 0
+    for m in _TOKEN.finditer(tex, start):
+        token = m.group()
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+            if depth == 0:
+                return m.start()
+    return None
+
+
+def _is_parenthesized(content: str) -> bool:
+    """Whether content is one '(...)' / '\\left(...\\right)' unit already,
+    possibly inside one font macro ('\\mathrm{(train)}')."""
+    inner = content.strip()
+    font = re.fullmatch(r"\\[A-Za-z]+\s*\{(.*)\}", inner, re.DOTALL)
+    if font and _matching_brace(inner, inner.index("{")) == len(inner) - 1:
+        inner = font.group(1).strip()
+    if inner.startswith("\\left(") and inner.endswith("\\right)"):
+        inner = "(" + inner[len("\\left(") : -len("\\right)")] + ")"
+    if not (inner.startswith("(") and inner.endswith(")")):
+        return False
+    depth = 0
+    for i, c in enumerate(inner):
+        depth += {"(": 1, ")": -1}.get(c, 0)
+        if depth == 0 and i < len(inner) - 1:
+            return False  # '(a)(b)': the first ')' closes before the end
+    return depth == 0
+
+
+def _script(marker: str, content: str) -> str | None:
+    """The replacement for marker + '{content}' (content already processed),
+    or None to leave it for pylatexenc as is."""
+    stripped = content.strip()
+    if marker == "^":
+        primes = re.fullmatch(r"(?:\\prime|')+", stripped)
+        if primes:
+            count = len(re.findall(r"\\prime|'", stripped))
+            return {1: "′", 2: "″", 3: "‴"}.get(count, "′" * count)
+        if stripped in _SUP_SYMBOLS:
+            return _SUP_SYMBOLS[stripped]
+    if "\\" not in content and "{" not in content:
+        converted = _scriptify(content, _SUB_MAP if marker == "_" else _SUP_MAP)
+        if converted is not None:
+            return converted
+    if not stripped or _SIMPLE_SCRIPT.fullmatch(stripped) or _is_parenthesized(stripped):
+        return None
+    # Not representable and more than one token: parenthesize, as plain-text
+    # math does ('x^(iⱼ)', 'e^(-x²)'), or '^' binds only the first token to
+    # the eye ('x^i_j' reads as x^i with a subscript j).
+    return f"{marker}{{({stripped})}}"
 
 
 def _unicode_scripts(tex: str) -> str:
-    """Replace _{...}/^{...} groups (and bare _x/^x) with true Unicode
-    sub/superscript characters when every character in the group has one,
-    e.g. '_{int}' -> 'ᵢₙₜ', '_1' -> '₁'. Left untouched (pylatexenc's own
-    '_word' fallback applies later) when not fully representable, and
-    skipped entirely if the group contains a macro (backslash) -- that
-    needs pylatexenc's own expansion first, and Greek letters have no
-    Unicode subscript forms anyway, so it would never apply to them
-    regardless.
+    """Rewrite every '_'/'^' script, innermost first:
 
-    A macro name immediately followed by the substituted Unicode
-    characters (e.g. '\\sum_{i=1}' with no space before the underscore)
-    would otherwise glue onto it -- pylatexenc reads '\\sumᵢ₌₁' as one
-    (unknown, dropped) macro name, silently losing the \\sum entirely. When
-    a bare macro name (\\[a-zA-Z]+) immediately precedes the match, a
-    protecting space is inserted before the substitution; LaTeX itself
-    already treats a space there as insignificant (a control word always
-    consumes one trailing space), so this never changes the parsed
-    meaning, only guards tokenization.
+    - fully representable content -> true Unicode sub/superscript characters
+      ('_{int}' -> 'ᵢₙₜ', '^{n + 1}' -> 'ⁿ⁺¹'), and primes, '\\\\top' and
+      '\\\\circ' to their own characters ('f^{\\\\prime}' -> 'f′');
+    - otherwise, content that is more than one simple token is wrapped in
+      parentheses ('x^{i_j}' -> 'x^(iⱼ)'), since pylatexenc just prints the
+      marker and the content;
+    - otherwise (one token: '^{T}'... 'u_{phy}', 'L_{\\\\Theta}') left to pylatexenc.
+
+    Every braced group is processed, not only scripts, so scripts inside
+    '\\\\frac{...}' or '\\\\sqrt{...}' are reached too; macro arguments are never
+    taken for scripts. The escaped '\\\\_' and the accent '\\\\^' aren't markers,
+    and a '{' that's never closed is left as it is.
+
+    A macro name immediately followed by substituted Unicode characters
+    ('\\\\sum_{i=1}' -> '\\\\sumᵢ₌₁') would glue onto it -- pylatexenc would read
+    one unknown macro and drop the \\\\sum -- so a protecting space goes between.
     """
-
-    def _replace(m: re.Match[str]) -> str:
-        prefix = m.group("prefix") or ""
-        content = m.group("content")
-        mapping = _SUB_MAP if m.group("marker") == "_" else _SUP_MAP
-        converted = None if "\\" in content else _scriptify(content, mapping)
-        if converted is None:
-            return m.group(0)
-        sep = " " if prefix else ""
-        return prefix + sep + converted
-
-    tex = _BRACED_SCRIPT.sub(_replace, tex)
-
-    # Any '_{...}'/'^{...}' group still present here failed the braced pass
-    # (a backslash, or a character with no Unicode script form) and must be
-    # left whole -- mask it so the bare pass below can't reach *inside* it and
-    # do a partial conversion, e.g. the '_j' of a surviving '^{i_j}' becoming
-    # '^{iⱼ}'. The '\x00N\x00' placeholder can't appear in real LaTeX and
-    # contains no '_'/'^', so it's inert to the bare regex.
-    saved: list[str] = []
-
-    def _mask(m: re.Match[str]) -> str:
-        saved.append(m.group(0))
-        return f"\x00{len(saved) - 1}\x00"
-
-    tex = _SCRIPT_GROUP.sub(_mask, tex)
-    tex = _BARE_SCRIPT.sub(_replace, tex)
-    return _MASK_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], tex)
+    out: list[str] = []
+    after_control_word = False
+    pos = 0
+    while pos < len(tex):
+        token = _TOKEN.match(tex, pos).group()
+        if token == "{":
+            close = _matching_brace(tex, pos)
+            if close is None:
+                out.append(token)
+                pos += 1
+                after_control_word = False
+                continue
+            out.append("{" + _unicode_scripts(tex[pos + 1 : close]) + "}")
+            pos = close + 1
+            after_control_word = False
+            continue
+        if token in ("_", "^"):
+            nxt = tex[pos + 1 : pos + 2]
+            replacement = None
+            end = pos + 1
+            if nxt == "{" and (close := _matching_brace(tex, pos + 1)) is not None:
+                content = _unicode_scripts(tex[pos + 2 : close])
+                replacement = _script(token, content)
+                if replacement is None:
+                    replacement = f"{token}{{{content}}}"
+                end = close + 1
+            elif nxt in _BARE_SCRIPT_CHARS or nxt == "'":
+                mapping = _SUB_MAP if token == "_" else _SUP_MAP
+                replacement = mapping.get(nxt)
+                if replacement is None and token == "^" and nxt == "'":
+                    replacement = "′"
+                if replacement is None:
+                    replacement = token + nxt
+                end = pos + 2
+            if replacement is None:
+                replacement, end = token, pos + 1
+            unicode_start = not replacement.startswith(("_", "^"))
+            if after_control_word and unicode_start:
+                out.append(" ")
+            out.append(replacement)
+            pos = end
+            after_control_word = False
+            continue
+        out.append(token)
+        pos += len(token)
+        after_control_word = token.startswith("\\") and token[1:].isalpha()
+    return "".join(out)
 
 
 _PROSE_WORD = re.compile(r"[A-Za-z]{2,}")

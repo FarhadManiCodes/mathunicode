@@ -211,12 +211,13 @@ def test_convert_math_spans_display_prose_restores_double_dollar():
     assert convert_math_spans(text) == text
 
 
-def test_unicode_scripts_no_partial_conversion_inside_nested_group():
-    # A '_'/'^' group left whole because it isn't fully representable must not
-    # have its interior reached by the bare pass: 'x^{i_j}' stays 'x^{i_j}',
-    # never a partial 'x^{iⱼ}'.
-    assert _unicode_scripts("x^{i_j}") == "x^{i_j}"
-    assert _unicode_scripts("L_{a\\Theta}") == "L_{a\\Theta}"
+def test_nested_script_group_is_converted_inside_and_parenthesized():
+    # 'x^{i_j}' used to print 'x^i_j', which reads as x^i with a subscript j.
+    # The inner script is converted and the group parenthesized, so the
+    # grouping is explicit.
+    assert _unicode_scripts("x^{i_j}") == "x^{(iⱼ)}"
+    assert latex_to_unicode("x^{i_j}") == "x^(iⱼ)"
+    assert latex_to_unicode("L_{a\\Theta}") == "L_(aΘ)"
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +618,7 @@ def test_colon_at_end_has_no_trailing_space():
 def test_wide_accent_on_long_argument_stays_plain():
     # A mark on every character of a long expression is noise.
     assert latex_to_unicode("\\overline{x+y}") == "x+y"
-    assert latex_to_unicode("\\overline{{u_{1}^{\\prime} c^{\\prime}}}") == "u₁^' c^'"
+    assert latex_to_unicode("\\overline{{u_{1}^{\\prime} c^{\\prime}}}") == "u₁′ c′"
 
 
 def test_argument_macros_tolerate_missing_arguments():
@@ -719,7 +720,7 @@ def test_cases_and_aligned_compose_with_surrounding_math():
     text = "f(x) = \\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}"
     assert latex_to_unicode(text) == "f(x) = {1, x>0; 0, else}"
     assert latex_to_unicode("\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}") == "a = b; c = d"
-    assert latex_to_unicode("\\sum_{\\substack{i<n \\\\ j<m}} x_{ij}") == "∑_i<n; j<m xᵢⱼ"
+    assert latex_to_unicode("\\sum_{\\substack{i<n \\\\ j<m}} x_{ij}") == "∑_(i<n; j<m) xᵢⱼ"
 
 
 def test_array_has_no_invented_brackets_and_null_delimiters_vanish():
@@ -758,7 +759,69 @@ def test_interval_after_begin_aligned_is_content_not_position():
 def test_letter_gap_collapse_never_glues_a_macro_to_the_next_letter():
     # '\omega t' became '\omegat', an unknown macro pylatexenc drops: the
     # 'ωt' vanished (299 spans in the paper library lost content this way).
-    assert latex_to_unicode("e^{-i\\omega t}") == "e^-iωt"
-    assert latex_to_unicode("\\mathbb{R}^{d\\times d}") == "ℝ^d×d"
+    assert latex_to_unicode("e^{-i\\omega t}") == "e^(-iωt)"
+    assert latex_to_unicode("\\mathbb{R}^{d\\times d}") == "ℝ^(d×d)"
     # OCR letter-spacing is still undone.
     assert latex_to_unicode("u _ {p h y}") == "u_phy"
+
+
+# ---------------------------------------------------------------------------
+# Script groups: Unicode where every character has a form, parentheses where
+# the group is more than one token, left alone when it's one token
+# ---------------------------------------------------------------------------
+
+
+def test_complex_script_groups_are_parenthesized():
+    cases = {
+        "e^{-x^2}": "e^(-x²)",
+        "\\min_{\\Theta,\\Lambda} f": "min_(Θ,Λ) f",
+        "x_{i,j}": "x_(i,j)",
+        "a^{b^c}": "a^(bᶜ)",
+        "\\psi_{1,0},\\psi_{1/2,0}": "ψ_(1,0),ψ_(1/2,0)",
+        "\\mathbb{R}^{n\\times m}": "ℝ^(n×m)",
+        "x_{i,j}^{2}": "x_(i,j)²",
+        "\\sqrt{e^{-x^2}}": "√(e^(-x²))",
+        "e^{-(x-\\mu)^2}": "e^(-(x-μ)²)",
+    }
+    for tex, expected in cases.items():
+        assert latex_to_unicode(tex) == expected, tex
+
+
+def test_already_parenthesized_group_gets_no_second_pair():
+    assert latex_to_unicode("x^{\\left( k \\right)}") == "x^( k )"
+    assert latex_to_unicode("x^{(k)}") == "x⁽ᵏ⁾"
+
+
+def test_single_token_groups_stay_unwrapped():
+    cases = {
+        "u_{phy}": "u_phy",
+        "L_{\\Theta}": "L_Θ",
+        "\\min_{\\mathbf{x}} f": "min_𝐱 f",
+        "x_{\\text{max}}": "x_max",
+        "x^{*}": "x^*",
+        "x^\\alpha": "x^α",
+    }
+    for tex, expected in cases.items():
+        assert latex_to_unicode(tex) == expected, tex
+
+
+def test_representable_groups_ignore_ocr_spaces():
+    assert latex_to_unicode("x^{n + 1}") == "xⁿ⁺¹"
+    assert latex_to_unicode("\\sum\\limits_{i=1}^{n}") == "∑ᵢ₌₁ⁿ"
+
+
+def test_superscript_symbols_have_their_own_characters():
+    assert latex_to_unicode("A^{T}") == "Aᵀ"
+    assert latex_to_unicode("A^{\\top}") == "Aᵀ"
+    assert latex_to_unicode("f^{\\prime}") == "f′"
+    assert latex_to_unicode("f^{\\prime\\prime}") == "f″"
+    assert latex_to_unicode("90^{\\circ}") == "90°"
+
+
+def test_unbalanced_group_left_as_is():
+    assert latex_to_unicode("x^{") == "x^"
+    assert latex_to_unicode("x_{i") == "x_i"
+
+
+def test_parenthesized_font_argument_gets_no_second_pair():
+    assert latex_to_unicode("x^{\\mathrm{(train)}}") == "x^(train)"
