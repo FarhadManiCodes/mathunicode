@@ -94,6 +94,42 @@ def _pmod(node, l2tobj) -> str:
     return f"(mod {texts[0]})" if texts and texts[0] else "mod"
 
 
+def _tolerant_template(template: str):
+    """One of pylatexenc's own '%s' templates ('%s/%s' for \\frac, '√(%(2)s)'
+    for \\sqrt), filled the same way, but with a required argument missing
+    just the arguments that are there: pylatexenc leaks the raw template
+    ('\\frac{a}' -> '%s/%sa') or raises (a bare '\\sqrt')."""
+
+    # The argument slots the template fills: '%(2)s' fills slot 2, and each
+    # positional '%s' the next slot in order.
+    numbered = [int(n) - 1 for n in re.findall(r"%\((\d+)\)s", template)]
+    used = numbered or list(range(template.count("%s")))
+
+    def repl(node, l2tobj) -> str:
+        args = getattr(node.nodeargd, "argnlist", None) or []
+        texts = _arg_texts(node, l2tobj)
+        required_missing = any(i >= len(args) or args[i] is None for i in used)
+        if required_missing:
+            return " ".join(t for t in texts if t)
+        if "%(" in template:
+            return template % {str(i + 1): t for i, t in enumerate(texts)}
+        return template % tuple(texts)
+
+    return repl
+
+
+def _tolerant_templates(db, overridden: tuple[str, ...]) -> list[MacroTextSpec]:
+    """A _tolerant_template spec for each default macro whose text is a '%'
+    template, except those given their own spec here."""
+    specs = {}
+    for category in db.categories():
+        for name, spec in db.d[category]["macros"].items():
+            template = spec.simplify_repl
+            if name not in specs and name not in overridden and isinstance(template, str) and "%" in template:
+                specs[name] = MacroTextSpec(name, simplify_repl=_tolerant_template(template))
+    return list(specs.values())
+
+
 def _build_context_db():
     db = get_default_latex_context_db()
     wide_accents = [
@@ -155,6 +191,7 @@ def _build_context_db():
                 MacroTextSpec(name, simplify_repl=_binom)
                 for name in ("binom", "dbinom", "tbinom")
             ),
+            *_tolerant_templates(db, overridden=("overline", "widetilde", "widehat")),
             # amsmath's italic capital Greek; plain Unicode has only upright.
             *(
                 MacroTextSpec("var" + name, simplify_repl=char)

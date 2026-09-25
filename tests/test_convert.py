@@ -650,3 +650,17 @@ def test_convert_math_spans_crlf_line_endings():
     assert convert_math_spans(text) == "~~~\r\n$a$\r\n~~~\r\nthen x²\r\n"
     # A code span can't cross a CRLF blank line.
     assert convert_math_spans("`a\r\n\r\nb` $x_1$ `c") == "`a\r\n\r\nb` $x_1$ `c"
+
+
+def test_default_templates_tolerate_missing_arguments():
+    # pylatexenc's own '%s' templates leaked ('\frac{a}' -> '%s/%sa') or raised
+    # (a bare '\sqrt', so the whole expression came back raw).
+    assert latex_to_unicode("\\frac{a}") == "a"
+    assert latex_to_unicode("x + \\frac") == "x + "
+    assert latex_to_unicode("x + \\sqrt") == "x + "
+    assert latex_to_unicode("\\braket{a}") == "a"
+    # Complete input is filled as before.
+    assert latex_to_unicode("\\frac{a}{b}") == "a/b"
+    assert latex_to_unicode("\\sqrt[3]{x}") == "√(x)"
+    assert latex_to_unicode("\\braket{a}{b}") == "⟨a|b⟩"
+    assert latex_to_unicode("\\footnote{hi}") == "[hi]"
