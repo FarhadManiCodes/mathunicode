@@ -1,29 +1,32 @@
 # mathunicode test document
 
-A hand-picked set of cases covering every code path. Expected results are in
-the comment after each line.
+A hand-picked set of cases covering every code path. The comment after each
+line is the expected rendering of its math, in order, separated by ` / `
+("no math" where nothing on the line may be taken for math); it is checked by
+`tests/test_examples.py`. Multi-row math and script grouping have their own
+file, `multiline.md`.
 
 ## Inline math ($...$)
 
-- Subscript: $x_{i}$ and bare $x_1$            <!-- xᵢ / x₁ -->
-- Superscript: $\alpha^2$ and $10^6$           <!-- α² / 10⁶ -->
-- Multi-char subscript fully covered: $_{int}$ <!-- ᵢₙₜ -->
-- Not fully representable, stays plain: $u_{phy}$   <!-- u_phy (y has no subscript form) -->
-- Sum with protected macro: $\sum_{i=1}^{n}$   <!-- ∑ᵢ₌₁ⁿ -->
-- Nested script left whole (no partial): $x^{i_j}$  <!-- x^i_j, never x^iⱼ -->
+- Subscript: $x_{i}$ and bare $x_1$            <!-- expect: xᵢ / x₁ -->
+- Superscript: $\alpha^2$ and $10^6$           <!-- expect: α² / 10⁶ -->
+- Multi-char subscript fully covered: $_{int}$ <!-- expect: ᵢₙₜ -->
+- No subscript form for 'y', stays plain: $u_{phy}$ <!-- expect: u_phy -->
+- Sum with protected macro: $\sum_{i=1}^{n}$   <!-- expect: ∑ᵢ₌₁ⁿ -->
+- Nested script, grouping kept: $x^{i_j}$         <!-- expect: x^(iⱼ) -->
 
 ## Macros pylatexenc drops or mishandles
 
-- Norm: $\| x \|^2$                            <!-- ‖ x ‖² -->
-- Determinant: $\det(A) = 0$                   <!-- det(A) = 0 -->
-- Trig: $\cot(x) + \csc(x)$                    <!-- cot(x) + csc(x) -->
-- Probability: $\Pr(X > 0)$                    <!-- Pr(X > 0) -->
-- Logic: $p \land q$                           <!-- p ∧ q -->
+- Norm: $\| x \|^2$                            <!-- expect: ‖ x ‖² -->
+- Determinant: $\det(A) = 0$                   <!-- expect: det(A) = 0 -->
+- Trig: $\cot(x) + \csc(x)$                    <!-- expect: cot(x) + csc(x) -->
+- Probability: $\Pr(X > 0)$                    <!-- expect: Pr(X > 0) -->
+- Logic: $p \land q$                           <!-- expect: p ∧ q -->
 
 ## Prose / currency guards (must stay verbatim)
 
-- Two amounts: costs $50 to train, compared to $100 for the baseline.
-- Escaped dollars: the item is \$5 and the combo is \$10 total.
+- Two amounts: costs $50 to train, compared to $100 for the baseline. <!-- expect: no math -->
+- Escaped dollars: the item is \$5 and the combo is \$10 total. <!-- expect: no math -->
 
 ## Display block on one line ($$ ... $$)
 
