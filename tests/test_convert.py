@@ -18,7 +18,8 @@ def _table(cases: dict[str, str]):
     "e^{-x^2}": "e^(−x²)",
     "e^{-i\\omega t}": "e^(−iωt)", "\\min_{\\Theta, \\Lambda} f": "min_(Θ, Λ) f", "a^{b^c}": "a^(bᶜ)",
     "\\mathbb{R}^{n \\times m}": "ℝ^(n × m)", "\\lim_{n \\to \\infty} a_n": "lim_(n → ∞) aₙ",
-    "\\underbrace{a+b}_{n}": "(a + b)ₙ", "e^{\\gamma t} F(t)": "e^(γt)F(t)", "{i_j}^2": "iⱼ²",
+    "\\underbrace{a+b}_{n}": "(a + b)ₙ", "e^{\\gamma t} F(t)": "eᵞᵗF(t)",
+    "e^{\\omega t}": "e^(ωt)", "{i_j}^2": "iⱼ²",
     "\\left.\\frac{df}{dx}\\right|_{x=0}": "df/dx|ₓ₌₀", "x^{|a|+|b|}": "x^(|a| + |b|)",
 })
 def test_scripts(tex, expected):
@@ -59,7 +60,8 @@ def test_rows(tex, expected):
     "\\frac1B\\frac1N": "1/B 1/N", "u(0, x) = -\\sin(\\pi x)": "u(0, x) = −sin(πx)", "x \\le -\\gamma": "x ≤ −γ",
     # an operator name hugs its argument; limits set in a line are spaced from it
     "\\log_2(n)": "log₂(n)", "\\operatorname{Cov}\\left(y, x\\right)": "Cov(y, x)", "f\\left(x\\right)": "f(x)",
-    "\\sum_{i=1}^{m} (u_i - y_i)": "∑ᵢ₌₁ᵐ (uᵢ − yᵢ)", "\\lim_{\\epsilon \\to 0} (f(x) - f(y))": "lim_(ϵ → 0) (f(x) − f(y))",
+    "\\sum_{i=1}^{m} (u_i - y_i)": "∑ᵢ₌₁ᵐ (uᵢ − yᵢ)",
+    "\\lim_{\\epsilon \\to 0} (f(x) - f(y))": "lim_(ϵ → 0) (f(x) − f(y))",
     "\\mathrm{Err} - x": "Err − x", "\\mathrm{EPE} (\\hat{f})": "EPE(f̂)", "y'^{(i+1)}": "y′⁽ⁱ⁺¹⁾",
 })
 def test_spacing(tex, expected):

@@ -4,41 +4,30 @@ _render gives each element one rule. Public: latex_to_unicode, convert_math_span
 import html
 import re
 import unicodedata
-from importlib.resources import files
 from itertools import groupby
 from xml.etree.ElementTree import Element
 
 from latex2mathml.converter import convert_to_element
 
-# Unicode's sub/superscript characters; a script uses them only if all have one.
-_SUB = dict(zip("0123456789+-−=()aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ", strict=True))
-_SUP = dict(zip("0123456789+-−=()abcdefghijklmnoprstuvwxyzABDEGHIJKLMNOPRTUVW∘",  # raised ∘ is a degree
-                "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂ°", strict=True))
-_SUP.update({c: c for c in "′″‴°*"})  # already raised: kept as they are
+# Character data -- sub/superscripts, TeX atom classes, styled letters -- derived from Unicode and
+# unicode-math by _build_tables.py.
+from mathunicode._tables import CLASS as _CLASS
+from mathunicode._tables import STYLED as _STYLED
+from mathunicode._tables import SUB as _SUB
+from mathunicode._tables import SUP as _SUP
+
 # Marks over/under a base -> combining characters ("" for braces: dropped).
 _ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "̃",
             "˜": "̃", "˙": "̇", "¨": "̈", "→": "⃗", "ˇ": "̌", "˘": "̆",
             "⏟": "", "⏞": "", "︸": "", "︷": ""}
 _SCRIPTS = ("msub", "msup", "msubsup", "munder", "mover", "munderover")
 
-# TeX's atom class of each symbol, from latex2mathml's copy of unimathsymbols
-# (plain TeX's own mathcodes for the four ASCII characters where they differ).
-_CLASS = {"/": "Ord", ":": "Rel", "!": "Close"}
-_TEX = dict(B="Bin", V="Bin", R="Rel", L="Op", O="Open", C="Close", P="Punct")  # unicode-math class letters
-for _line in (files("latex2mathml") / "unimathsymbols.txt").read_text(encoding="utf-8").splitlines():
-    _f = _line.split("^")
-    if len(_f) > 4 and len(_f[1]) == 1 and not _line.startswith("#"):
-        _CLASS.setdefault(_f[1], _TEX.get(_f[4], "Ord"))
 # TeX's inter-atom spacing (The TeXbook, ch. 18): '1' where a space goes between a left atom (row)
 # and a right atom (column), in the order of _ORDER -- but never before punctuation, as in text.
 _ORDER = ("Ord", "Op", "Bin", "Rel", "Open", "Close", "Punct", "Inner")
 _SPACING = dict(zip(_ORDER, ("01110001", "11010001", "11001001", "11001001", "00000000", "01110001",
                              "11011101", "11111001"), strict=True))
 _SPACING["Sign"] = _SPACING["Ord"]  # a prefix sign is an Ord (and attaches to what follows)
-# Unicode's styled letters by (style words, base letter): 𝐱 bold x, ℝ double-struck R.
-_STYLED = {(frozenset(re.split(r"[- ]", m[1].replace("BLACK-LETTER", "FRAKTUR"))), unicodedata.normalize("NFKC", c)): c
-           for c in map(chr, [*range(0x1D400, 0x1D800), *range(0x2100, 0x2150)])
-           if (m := re.match(r"(?:MATHEMATICAL )?(.+?) (?:CAPITAL|SMALL|DIGIT)\b", unicodedata.name(c, "")))}
 
 
 def _text(node) -> str:
@@ -75,7 +64,7 @@ def _class(node) -> str:
 
 def _atoms(kids) -> list[list[tuple[str, object]]]:
     """(class, node) per row, without rendering: '&' is only an alignment point, a line break starts
-    a row, a run of upright letters is one word, bars pair up (odd opens, even closes), a Bin with
+    a row, a run of upright letters is one word, fences like '|' pair up (odd opens, even closes), a Bin with
     no operand before it is a Sign (TeX's Ord, attached to what follows) and before a Rel, Close or
     Punct an Ord; an explicit space is a 'Space' atom."""
     rows: list[list[tuple[str, object]]] = [[]]
@@ -93,8 +82,7 @@ def _atoms(kids) -> list[list[tuple[str, object]]]:
             if k.tag == "mi" and k.text == "&":
                 continue
             cls = "Space" if k.tag == "mspace" else _class(k)
-            nucleus = k[0] if k.tag in _SCRIPTS and len(k) else k  # a closing bar may carry a script: '|x|₁'
-            if nucleus.tag == "mo" and _text(nucleus) in ("|", "‖") and not nucleus.get("form"):
+            if cls == "Fence":  # opens or closes by position ('|x|', and '|x|₁': a scripted atom has its nucleus's)
                 cls, bars = ("Open" if bars % 2 == 0 else "Close"), bars + 1
             if cls == "Bin" and (last is None or rows[-1][last][0] in ("Bin", "Op", "Rel", "Open", "Punct", "Sign")):
                 cls = "Sign"
@@ -142,7 +130,7 @@ def _script(base: str, script_node, marker: str) -> str:
 def _render(node) -> str:
     tag, kids = node.tag, list(node)
     if tag == "mtext":
-        return re.sub(r"\\([_$%&#{}])", r"\1", html.unescape(node.text or ""))
+        return re.sub(r"\\([^A-Za-z])", r"\1", html.unescape(node.text or ""))  # '\_' prints '_'
     if tag in ("mi", "mn", "mo", "ms"):
         style = frozenset(re.split(r"[- ]", (node.get("mathvariant") or "").upper()))
         return "".join(_STYLED.get((style, c), c) for c in _text(node))
@@ -150,7 +138,8 @@ def _render(node) -> str:
         return " " if tag == "mspace" else ""
     if tag in ("munder", "mover") and len(kids) == 2 and (mark := _ACCENTS.get(_render(kids[1]).strip())) is not None:
         base = _render(kids[0])
-        return "".join(c + mark for c in base) if mark and 0 < len(base) <= 3 and base.isalnum() else base
+        plain = base and all(unicodedata.category(c) in ("Lu", "Ll", "Lo", "Nd") for c in base)
+        return "".join(c + mark for c in base) if mark and plain else base
     if tag in _SCRIPTS and len(kids) in (2, 3):
         out = _render(kids[0])
         out = out if not out or _unit(kids[0]) else f"({out})"
@@ -175,10 +164,11 @@ def _render(node) -> str:
 
 
 def _cells(cells: list[str]) -> str:
-    """Cells joined by ', ' -- a space if one continues an alignment ('= b') or follows punctuation."""
+    """Cells joined by ', ' -- a space instead where a cell continues an alignment ('= b') or the
+    previous one already ends in a separator (',' or ';')."""
     out = ""
     for cell in filter(None, cells):
-        out += (" " if _CLASS.get(cell[0]) == "Rel" or out[-1] in ",;:" else ", ") + cell if out else cell
+        out += (" " if _CLASS.get(cell[0]) == "Rel" or out[-1] in ",;" else ", ") + cell if out else cell
     return out
 
 
@@ -194,12 +184,12 @@ def _render_row(kids) -> str:
                 continue
             text = _render(node)
             # An operator name hugs its argument ('det(A)', 'log₂(n)'); a big operator with limits
-            # ('∑ᵢ₌₁ᵐ (…)') or a name whose limits are parenthesized ('lim_(ϵ → 0) (…)') is spaced
+            # ('∑ᵢ₌₁ᵐ (…)') or a name whose limits are written out ('lim_(ϵ → 0) (…)') is spaced
             # from what follows -- set in a line, the two would run together.
             op, scripted = left is not None and left[0] == "Op", left is not None and left[1].tag in _SCRIPTS
             name = op and _text(left[1][0] if scripted else left[1]).isalpha()
-            limits = op and scripted and (not name or left[2].endswith(")"))
-            applied = name and not limits and text[:1] in "(["
+            limits = op and scripted and (not name or bool(re.search(r"[_^]", left[2])))  # not in Unicode scripts
+            applied = name and not limits and _CLASS.get(text[:1]) == "Open"
             touching = left is not None and left[2][-1:].isalnum() and text[:1].isalnum()
             spaced = left is not None and left[0] != "Sign" and not applied and (
                 limits or _SPACING[left[0]][_ORDER.index("Ord" if cls == "Sign" else cls)] == "1"
