@@ -48,7 +48,8 @@ def _build_parse_db():
             *(macrospec.std_macro(name, False, 2) for name in ("binom", "dbinom", "tbinom")),
         ],
         # alignedat{n} takes a column count, like alignat{n} (which pylatexenc
-        # knows); without the spec the 'n' is read as content.
+        # knows); without the spec the 'n' is read as content. Its optional
+        # [t]/[b] position is removed beforehand (_POSITION_ARGUMENT).
         environments=[macrospec.std_environment("alignedat", "{")],
     )
     return db
@@ -331,13 +332,21 @@ _SOURCE_NEWLINE = re.compile(r"[ \t]*\r?\n\s*")
 _NULL_DELIMITER = re.compile(r"\\(?:left|right|[bB]igg?[lr]?)\s*\.")
 
 
+# The optional vertical position of aligned/gathered/alignedat ('[t]', '[b]',
+# '[c]'), which would otherwise print. Only those exact values: a generic
+# optional argument would swallow real content such as the interval in
+# '\\begin{aligned} [a,b] &= c'.
+_POSITION_ARGUMENT = re.compile(r"(\\begin\s*\{(?:aligned|gathered|alignedat)\})\s*\[[tbc]\]")
+
+
 def _join_source_lines(tex: str) -> str:
     """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
     come from '\\\\', never from source line breaks, so the source is joined
     onto one line -- comments first, or joining would let a comment swallow
     the lines after it (pylatexenc drops comments anyway)."""
     tex = _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
-    return _NULL_DELIMITER.sub("", tex)
+    tex = _NULL_DELIMITER.sub("", tex)
+    return _POSITION_ARGUMENT.sub(r"\1", tex)
 
 
 def _join_rows(text: str) -> str:

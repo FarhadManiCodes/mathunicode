@@ -743,3 +743,13 @@ def test_cases_comma_before_ampersand_not_doubled():
 
 def test_alignedat_column_count_not_in_output():
     assert latex_to_unicode("\\begin{alignedat}{2} a &= b \\\\ e &= f \\end{alignedat}") == "a = b; e = f"
+
+
+def test_optional_position_argument_not_in_output():
+    assert latex_to_unicode("\\begin{aligned}[t] a &= b \\\\ c &= d \\end{aligned}") == "a = b; c = d"
+    assert latex_to_unicode("\\begin{gathered}[b] a \\\\ b \\end{gathered}") == "a; b"
+    assert latex_to_unicode("\\begin{alignedat}[t]{2} a &= b \\end{alignedat}") == "a = b"
+
+
+def test_interval_after_begin_aligned_is_content_not_position():
+    assert latex_to_unicode("\\begin{aligned} [a,b] &= c \\end{aligned}") == "[a,b] = c"
