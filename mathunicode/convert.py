@@ -28,13 +28,37 @@ def _build_parse_db():
     db.add_context_category(
         "mathunicode-fixes",
         prepend=True,
-        macros=[macrospec.std_macro("pmod", False, 1)],
+        macros=[
+            macrospec.std_macro("pmod", False, 1),
+            *(macrospec.std_macro(name, False, 2) for name in ("binom", "dbinom", "tbinom")),
+        ],
     )
     return db
 
 
+def _labelled_arrow(arrow: str, label_first: bool):
+    """Text for '\\xrightarrow[below]{above}': the 'above' label drawn on the
+    arrow's tail, '-f→' (or '←f-' for a left arrow); a bare arrow without
+    one. The rarer 'below' label is dropped."""
+
+    def repl(node, l2tobj) -> str:  # pylatexenc passes l2tobj by that name
+        above = node.nodeargd.argnlist[1]
+        label = l2tobj.nodelist_to_text([above]).strip() if above is not None else ""
+        if not label:
+            return arrow
+        return f"-{label}{arrow}" if label_first else f"{arrow}{label}-"
+
+    return repl
+
+
 def _build_context_db():
     db = get_default_latex_context_db()
+    # Wide accents drawn like their narrow forms, as combining marks on each
+    # character ('\\overline{AB}' -> 'A̅B̅'); pylatexenc drops the accent.
+    wide_accents = [
+        MacroTextSpec(wide, simplify_repl=db.get_macro_spec(narrow).simplify_repl)
+        for wide, narrow in (("overline", "bar"), ("widetilde", "tilde"), ("widehat", "hat"))
+    ]
     db.add_context_category(
         "mathunicode-fixes",
         prepend=True,
@@ -83,6 +107,13 @@ def _build_context_db():
             MacroTextSpec("rrbracket", simplify_repl="⟧"),
             MacroTextSpec("S", simplify_repl="§"),
             MacroTextSpec("P", simplify_repl="¶"),
+            *wide_accents,
+            MacroTextSpec("xrightarrow", simplify_repl=_labelled_arrow("→", label_first=True)),
+            MacroTextSpec("xleftarrow", simplify_repl=_labelled_arrow("←", label_first=False)),
+            *(
+                MacroTextSpec(name, simplify_repl="C(%s,%s)")
+                for name in ("binom", "dbinom", "tbinom")
+            ),
             # amsmath's italic capital Greek; plain Unicode has only upright.
             *(
                 MacroTextSpec("var" + name, simplify_repl=char)

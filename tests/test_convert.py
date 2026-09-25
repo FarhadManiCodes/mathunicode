@@ -579,3 +579,21 @@ def test_latex_to_unicode_dropped_symbols_batch_two():
     }
     for tex, expected in cases.items():
         assert latex_to_unicode(tex) == expected, tex
+
+
+def test_wide_accents_keep_their_mark():
+    # pylatexenc dropped the accent: '\overline{x}' -> 'x'.
+    assert latex_to_unicode("\\overline{x}") == "x̅"
+    assert latex_to_unicode("\\overline{AB}") == "A̅B̅"
+    assert latex_to_unicode("\\widetilde{x}") == "x̃"
+    assert latex_to_unicode("\\widehat{\\theta}") == "θ̂"
+
+
+def test_labelled_arrows_and_binomials():
+    # '\xrightarrow{f}' vanished entirely, label and arrow both.
+    assert latex_to_unicode("A \\xrightarrow{f} B") == "A -f→ B"
+    assert latex_to_unicode("A \\xleftarrow{f} B") == "A ←f- B"
+    assert latex_to_unicode("\\xrightarrow{}") == "→"
+    # '\binom{n}{k}' gave 'nk'.
+    assert latex_to_unicode("\\binom{n}{k}") == "C(n,k)"
+    assert latex_to_unicode("\\dbinom nk") == "C(n,k)"
