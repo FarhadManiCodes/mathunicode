@@ -318,6 +318,7 @@ _MARKER = r"(?<!(?<!\\)\\)[_^]"
 _SPACED_MARKER = re.compile(rf"(?:(?<![\s\\])\s+)?({_MARKER})\s*")
 _SPACED_GROUP = re.compile(rf"({_MARKER}\{{)([^{{}}]*)\}}")
 _LETTER_GAP = re.compile(r"(?<=[A-Za-z])\s+(?=[A-Za-z])")
+_MACRO_WITH_SPACE = re.compile(r"(\\[A-Za-z]+\s*)")
 
 
 # A TeX comment: an unescaped '%' ('\\%' is a literal percent; '\\\\%' a line
@@ -372,7 +373,13 @@ def _normalize_math_spacing(tex: str) -> str:
     tex = _SPACED_MARKER.sub(r"\1", tex)
 
     def _collapse(m: re.Match[str]) -> str:
-        return m.group(1) + _LETTER_GAP.sub("", m.group(2)) + "}"
+        # Macro names (with the space after them) are kept whole: collapsing
+        # '\\omega t' to '\\omegat' makes an unknown macro, which pylatexenc
+        # drops -- 'e^{-i\\omega t}' lost its 'ωt'.
+        parts = _MACRO_WITH_SPACE.split(m.group(2))
+        return m.group(1) + "".join(
+            part if i % 2 else _LETTER_GAP.sub("", part) for i, part in enumerate(parts)
+        ) + "}"
 
     return _SPACED_GROUP.sub(_collapse, tex)
 

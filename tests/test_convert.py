@@ -753,3 +753,12 @@ def test_optional_position_argument_not_in_output():
 
 def test_interval_after_begin_aligned_is_content_not_position():
     assert latex_to_unicode("\\begin{aligned} [a,b] &= c \\end{aligned}") == "[a,b] = c"
+
+
+def test_letter_gap_collapse_never_glues_a_macro_to_the_next_letter():
+    # '\omega t' became '\omegat', an unknown macro pylatexenc drops: the
+    # 'ωt' vanished (299 spans in the paper library lost content this way).
+    assert latex_to_unicode("e^{-i\\omega t}") == "e^-iωt"
+    assert latex_to_unicode("\\mathbb{R}^{d\\times d}") == "ℝ^d×d"
+    # OCR letter-spacing is still undone.
+    assert latex_to_unicode("u _ {p h y}") == "u_phy"
