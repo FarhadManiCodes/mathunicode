@@ -144,8 +144,8 @@ _SPACED_MACRO = re.compile(
 
 
 # '\colon' is set like punctuation, 'f: X': no space before, one after (its
-# replacement text supplies that).
-_SPACE_BEFORE_COLON = re.compile(r"\s+(?=\\colon(?![A-Za-z]))")
+# replacement text supplies that). A control space '\ ' before it is kept.
+_SPACE_BEFORE_COLON = re.compile(r"(?<!(?<!\\)\\)\s+(?=\\colon(?![A-Za-z]))")
 
 
 def _keep_space_after_macros(tex: str) -> str:

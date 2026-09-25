@@ -553,4 +553,9 @@ def test_fence_inside_list_item_or_blockquote():
 def test_relation_after_alignment_or_spacing_macro():
     assert latex_to_unicode("x &\\leq y") == "x    ≤ y"
     assert latex_to_unicode("x\\quad\\implies y") == "x  ⟹ y"
-    assert latex_to_unicode("x\;\\to y") == "x → y"
+    assert latex_to_unicode("x\\;\\to y") == "x → y"
+
+
+def test_colon_keeps_control_space_before_it():
+    # Stripping the space of '\ ' turned '\ \colon' into '\\colon'.
+    assert "colon" not in latex_to_unicode("x\\ \\colon y")
