@@ -74,7 +74,9 @@ def test_spacing(tex, expected):
     "\\mathrm{a r g m i n}_x f": "argminₓ f", "\\mathrm{a\\ b}": "a b", "\\foo x": "foo x",
     "\\mathbb{R}": "ℝ", "\\text{is\\_ok}": "is_ok", "50\\%": "50%", "\\left. x \\right|": "x|",
     "\\boldsymbol{u}_{syn}": "𝒖_(syn)", "\\boldsymbol{\\theta}": "𝜽", "\\mathbf{x}": "𝐱",
-    "\\mathbb {R} ^ {2}": "ℝ²", "\\mathcal {H}": "ℋ", "\\sech x": "sech x",
+    "\\mathbb {R} ^ {2}": "ℝ²", "\\mathcal {H}": "ℋ", "\\sech x": "sech x", "\\boldsymbol{\\Theta}": "𝜣",
+    # control symbols in text: accents mark a letter, spacing is a space, the rest print
+    "\\text{caf\\'e na\\\"ive}": "café naïve", "\\text{a\\,b\\;c\\!d\\\\e}": "a b cd e",
 })
 def test_latex_semantics(tex, expected):
     assert latex_to_unicode(tex) == expected

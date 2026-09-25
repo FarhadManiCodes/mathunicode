@@ -20,6 +20,11 @@ from mathunicode._tables import SUP as _SUP
 _ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "̃",
             "˜": "̃", "˙": "̇", "¨": "̈", "→": "⃗", "ˇ": "̌", "˘": "̆",
             "⏟": "", "⏞": "", "︸": "", "︷": ""}
+# LaTeX's control symbols in text: an accent marks the next letter (\'e, \"{i}), a spacing one is a
+# space (\! a negative one) and any other prints its character (\_ is _).
+_TEXT_ACCENTS = dict(zip("'\"^~`=.", "\u0301\u0308\u0302\u0303\u0300\u0304\u0307", strict=True))
+_TEXT_SPACES = dict.fromkeys(",;:\\ \xa0", " ") | {"!": ""}
+_CONTROL_SYMBOL = re.compile(rf"\\([{re.escape(''.join(_TEXT_ACCENTS))}])\{{?(\w)\}}?|\\([^A-Za-z])")
 _SCRIPTS = ("msub", "msup", "msubsup", "munder", "mover", "munderover")
 
 # TeX's inter-atom spacing (The TeXbook, ch. 18): '1' where a space goes between a left atom (row)
@@ -130,7 +135,8 @@ def _script(base: str, script_node, marker: str) -> str:
 def _render(node) -> str:
     tag, kids = node.tag, list(node)
     if tag == "mtext":
-        return re.sub(r"\\([^A-Za-z])", r"\1", html.unescape(node.text or ""))  # '\_' prints '_'
+        return _CONTROL_SYMBOL.sub(lambda m: m[2] + _TEXT_ACCENTS[m[1]] if m[1] else _TEXT_SPACES.get(m[3], m[3]),
+                                   html.unescape(node.text or ""))
     if tag in ("mi", "mn", "mo", "ms"):
         style = frozenset(re.split(r"[- ]", (node.get("mathvariant") or "").upper()))
         return "".join(_STYLED.get((style, c), c) for c in _text(node))
