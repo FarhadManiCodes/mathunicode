@@ -72,5 +72,5 @@ collapse_math_blocks("before\n$$\nx_{i}\n$$\nafter")
 ## Tests
 
 ```
-uv run --extra test pytest tests/
+uv run pytest
 ```

@@ -6,15 +6,17 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [
-  "pylatexenc>=2.10",
+  # Uses 2.x internals (MacroTextSpec callables, parsed macro arguments);
+  # pylatexenc 3 is a rewrite. Tested on 2.10 and 2.11.
+  "pylatexenc>=2.10,<3",
 ]
 
 [project.scripts]
 mathunicode = "mathunicode.cli:main"
 mathunicode-collapse-blocks = "mathunicode.cli:main_collapse_blocks"
 
-[project.optional-dependencies]
-test = ["pytest>=8.0.0"]
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
 
 [build-system]
 requires = ["hatchling"]

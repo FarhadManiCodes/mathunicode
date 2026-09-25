@@ -28,17 +28,16 @@ dependencies = [
     { name = "pylatexenc" },
 ]
 
-[package.optional-dependencies]
-test = [
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "pylatexenc", specifier = ">=2.10" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
-]
-provides-extras = ["test"]
+requires-dist = [{ name = "pylatexenc", specifier = ">=2.10,<3" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0.0" }]
 
 [[package]]
 name = "packaging"
