@@ -79,7 +79,7 @@ def _atoms(kids) -> list[list[tuple[str, object]]]:
     no operand before it is a Sign (TeX's Ord, attached to what follows) and before a Rel, Close or
     Punct an Ord; an explicit space is a 'Space' atom."""
     rows: list[list[tuple[str, object]]] = [[]]
-    bars = 0
+    bars, last = 0, None  # last: index of the row's last non-space atom
     for upright, group in groupby(kids, key=lambda k: _upright_word(k) is not None):
         run = list(group)
         if upright:  # one word, standing in for its letters
@@ -88,6 +88,7 @@ def _atoms(kids) -> list[list[tuple[str, object]]]:
         for k in run:
             if k.tag == "mspace" and k.get("linebreak") == "newline":
                 rows.append([])
+                last = None
                 continue
             if k.tag == "mi" and k.text == "&":
                 continue
@@ -95,13 +96,12 @@ def _atoms(kids) -> list[list[tuple[str, object]]]:
             nucleus = k[0] if k.tag in _SCRIPTS and len(k) else k  # a closing bar may carry a script: '|x|₁'
             if nucleus.tag == "mo" and _text(nucleus) in ("|", "‖") and not nucleus.get("form"):
                 cls, bars = ("Open" if bars % 2 == 0 else "Close"), bars + 1
-            atoms = [c for c, _ in rows[-1] if c != "Space"]
-            if cls == "Bin" and (not atoms or atoms[-1] in ("Bin", "Op", "Rel", "Open", "Punct", "Sign")):
+            if cls == "Bin" and (last is None or rows[-1][last][0] in ("Bin", "Op", "Rel", "Open", "Punct", "Sign")):
                 cls = "Sign"
-            if atoms and atoms[-1] == "Bin" and cls in ("Rel", "Close", "Punct"):
-                i = max(i for i, (c, _) in enumerate(rows[-1]) if c == "Bin")
-                rows[-1][i] = ("Ord", rows[-1][i][1])
+            if last is not None and rows[-1][last][0] == "Bin" and cls in ("Rel", "Close", "Punct"):
+                rows[-1][last] = ("Ord", rows[-1][last][1])
             rows[-1].append((cls, k))
+            last = last if cls == "Space" else len(rows[-1]) - 1
     return rows
 
 
@@ -164,11 +164,11 @@ def _render(node) -> str:
         top, bottom = (f"({_render(k)})" if any(c in ("Bin", "Rel", "Punct") for row in _atoms(
             list(k) if k.tag in ("mrow", "mstyle") else [k]) for c, _ in row) else _render(k) for k in kids)
         return f"{top}/{bottom}"
-    if tag in ("msqrt", "mroot"):
-        radicand = kids[0] if tag == "mroot" or len(kids) == 1 else node
+    if tag in ("msqrt", "mroot"):  # an mroot is (radicand, index); an msqrt's children are its radicand
+        radicand = kids[:1] if tag == "mroot" else kids
         index = _script("", kids[1], "^") if tag == "mroot" and len(kids) == 2 else ""
-        text = _render(radicand) if radicand is not node else _render_row(kids)
-        return f"{index}√{text if _unit(radicand) else f'({text})'}"
+        text = _render_row(radicand)
+        return f"{index}√{text if len(radicand) == 1 and _unit(radicand[0]) else f'({text})'}"
     if tag == "mtable":
         return "; ".join(_cells([_render_row(list(td)) for td in tr]) for tr in kids)
     return _render_row(kids)
@@ -193,10 +193,16 @@ def _render_row(kids) -> str:
                 line += " "
                 continue
             text = _render(node)
-            applied = left is not None and left[0] == "Op" and text[:1] in "(["  # 'det(A)', 'Cov\\left(…'
+            # An operator name hugs its argument ('det(A)', 'log₂(n)'); a big operator with limits
+            # ('∑ᵢ₌₁ᵐ (…)') or a name whose limits are parenthesized ('lim_(ϵ → 0) (…)') is spaced
+            # from what follows -- set in a line, the two would run together.
+            op, scripted = left is not None and left[0] == "Op", left is not None and left[1].tag in _SCRIPTS
+            name = op and _text(left[1][0] if scripted else left[1]).isalpha()
+            limits = op and scripted and (not name or left[2].endswith(")"))
+            applied = name and not limits and text[:1] in "(["
             touching = left is not None and left[2][-1:].isalnum() and text[:1].isalnum()
             spaced = left is not None and left[0] != "Sign" and not applied and (
-                _SPACING[left[0]][_ORDER.index("Ord" if cls == "Sign" else cls)] == "1"
+                limits or _SPACING[left[0]][_ORDER.index("Ord" if cls == "Sign" else cls)] == "1"
                 or (touching and (_word(left[1]) or _word(node))))
             line, left = line + (" " if spaced else "") + text, (cls, node, text)
         if line.strip():

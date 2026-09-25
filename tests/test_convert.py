@@ -57,6 +57,10 @@ def test_rows(tex, expected):
     # TeX's atom classes: punctuation, postfix, relation pairs, binary operators whatever the tag
     "x.": "x.", "n!": "n!", "a := b": "a := b", "a \\pm b": "a ± b", "\\sigma^2/N": "σ²/N",
     "\\frac1B\\frac1N": "1/B 1/N", "u(0, x) = -\\sin(\\pi x)": "u(0, x) = −sin(πx)", "x \\le -\\gamma": "x ≤ −γ",
+    # an operator name hugs its argument; limits set in a line are spaced from it
+    "\\log_2(n)": "log₂(n)", "\\operatorname{Cov}\\left(y, x\\right)": "Cov(y, x)", "f\\left(x\\right)": "f(x)",
+    "\\sum_{i=1}^{m} (u_i - y_i)": "∑ᵢ₌₁ᵐ (uᵢ − yᵢ)", "\\lim_{\\epsilon \\to 0} (f(x) - f(y))": "lim_(ϵ → 0) (f(x) − f(y))",
+    "\\mathrm{Err} - x": "Err − x", "\\mathrm{EPE} (\\hat{f})": "EPE(f̂)", "y'^{(i+1)}": "y′⁽ⁱ⁺¹⁾",
 })
 def test_spacing(tex, expected):
     assert latex_to_unicode(tex) == expected
