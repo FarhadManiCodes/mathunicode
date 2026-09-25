@@ -61,6 +61,7 @@ def test_spacing(tex, expected):
     "a +\nb": "a + b", "x % note\n+ y": "x + y", "u_{p h y}": "u_phy",
     "\\mathrm{a r g m i n}_x f": "argminₓ f", "\\mathrm{a\\ b}": "a b", "\\foo x": "foo x",
     "\\mathbb{R}": "ℝ", "\\text{is\\_ok}": "is_ok", "50\\%": "50%", "\\left. x \\right|": "x|",
+    "\\boldsymbol{u}_{syn}": "𝒖_syn", "\\boldsymbol{\\theta}": "𝜽", "\\mathbf{x}": "𝐱",
 })
 def test_latex_semantics(tex, expected):
     assert latex_to_unicode(tex) == expected

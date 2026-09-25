@@ -21,10 +21,6 @@ _ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "�
 _RELATION = tuple("=<>≤≥≈≡∼→⇒⟹≠∈")  # a table cell starting with one continues an alignment
 
 
-def _tag(node) -> str:
-    return node.tag.rsplit("}", 1)[-1]
-
-
 def _group(text: str) -> str:
     """Parenthesize text that isn't one character, one word or one (...)."""
     word = all(unicodedata.category(c) in ("Lu", "Ll", "Lo", "Nd", "Mn") for c in text)
@@ -42,18 +38,31 @@ def _script(base: str, text: str, marker: str) -> str:
 
 def _upright_word(node) -> str | None:
     """Letters of an upright identifier or a group of them ('\\mathrm{if}')."""
-    if _tag(node) == "mi" and node.get("mathvariant") == "normal" and (node.text or "").isalpha():
+    if node.tag == "mi" and node.get("mathvariant") == "normal" and (node.text or "").isalpha():
         return node.text
-    letters = [_upright_word(c) for c in node] if _tag(node) in ("mrow", "mstyle") else []
+    letters = [_upright_word(c) for c in node] if node.tag in ("mrow", "mstyle") else []
     return "".join(letters) if letters and all(letters) else None
 
 
+def _styled(text: str, variant: str | None) -> str:
+    """A mathvariant ('\\boldsymbol': bold-italic) as Unicode's math alphabet, by character name."""
+    if not variant or variant == "normal":
+        return text
+    style, out = "MATHEMATICAL " + variant.upper().replace("-", " "), ""
+    for c in text:
+        try:
+            out += unicodedata.lookup(f"{style} {re.sub(r'^(LATIN|GREEK) | LETTER', '', unicodedata.name(c, ''))}")
+        except KeyError:  # no styled form (e.g. a digit in some styles): keep the character
+            out += c
+    return out
+
+
 def _render(node) -> str:
-    tag, kids, text = _tag(node), list(node), html.unescape(node.text or "")
+    tag, kids, text = node.tag, list(node), html.unescape(node.text or "")
     if tag == "mtext":
         return re.sub(r"\\([_$%&#{}])", r"\1", text)
-    if tag in ("mi", "mn", "mo", "ms"):
-        return text.lstrip("\\")  # an unknown macro prints its name, never nothing
+    if tag in ("mi", "mn", "mo", "ms"):  # an unknown macro prints its name, never nothing
+        return _styled(text.lstrip("\\"), node.get("mathvariant"))
     if tag in ("mspace", "mphantom"):
         return " " if tag == "mspace" else ""
     if tag in ("msub", "msup", "munder", "mover") and len(kids) == 2:
@@ -93,14 +102,14 @@ def _render_row(kids) -> str:
             rows[-1].append(("word" if len(letters) > 1 else "", letters))
             continue
         for k in run:
-            tag, text = _tag(k), _render(k)
+            tag, text = k.tag, _render(k)
             if tag == "mspace" and k.get("linebreak") == "newline":
                 rows.append([])
             elif tag == "mi" and k.text == "&":
                 continue
             elif (tag in ("mo", "mi") and len(text) > 1 and text.isalpha() and not k.get("mathvariant")) \
                     or (tag in ("msub", "msubsup", "munder", "munderover")
-                        and (_tag(k[0]) == "mo" or len(_upright_word(k[0]) or "") > 1)):
+                        and (k[0].tag == "mo" or len(_upright_word(k[0]) or "") > 1)):
                 rows[-1].append(("word", text))  # sin, det, ∑ᵢ₌₁ⁿ, lim_(n → ∞), argminₓ
             else:
                 rows[-1].append(("op" if tag == "mo" and text else "", text))
@@ -144,9 +153,8 @@ def _looks_like_prose(content: str) -> bool:
 
 
 def latex_to_unicode(tex: str) -> str:
-    """One LaTeX expression -> one line of Unicode; what doesn't parse comes
-    back as it was. Prose comes back in '$...$', with the space before the
-    closing '$' (the next amount's sign) put back: '5 and' -> '$5 and $'."""
+    """One LaTeX expression -> one line of Unicode; unparsable input comes back as it was, and prose
+    in '$...$' with the space before the next amount's '$' restored ('5 and' -> '$5 and $')."""
     try:
         if _SYNTAX_PLACEHOLDER.fullmatch(tex):
             return f"${tex}$"
@@ -159,9 +167,8 @@ def _convert(tex: str) -> str:
     return unicodedata.normalize("NFC", re.sub(r"\s+", " ", _render(convert_to_element(tex))).strip())
 
 
-# $$...$$, or $...$ on one line: a body starting with a digit must be tight
-# and not followed by a digit (currency '$5 or $6' never pairs); any other
-# may be padded, as OCR writes it. '\x01' marks masked code.
+# $$...$$, or $...$ on one line: a body starting with a digit is tight and not followed by a digit
+# (currency '$5 or $6' never pairs); any other may be padded, as OCR writes it. '\x01' is masked code.
 _MATH_SPAN = re.compile(
     r"(?<!\\)\$\$(?P<display>[^\x01]+?)(?<!\\)\$\$"
     r"|(?<!\\)\$(?:(?P<num>\d(?:[^\n$\x01]*?[^\s\\$\x01])?)\$(?!\d)"
@@ -208,8 +215,7 @@ def _unmask(text: str, saved: list[str]) -> str:
 
 
 def convert_math_spans(text: str) -> str:
-    """Convert each $...$/$$...$$ span of Markdown in place, leaving escaped
-    '\\$', code, prose, syntax placeholders and unparsable spans as written."""
+    """Convert each $...$/$$...$$ span in place; escaped '\\$', code, prose and unparsable spans stay."""
     saved: list[str] = []
     text, out, pos = _mask_code(text, saved), [], 0
     while m := _MATH_SPAN.search(text, pos):
