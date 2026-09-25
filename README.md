@@ -9,6 +9,10 @@ pylatexenc doesn't do on its own:
   norm; `\det(A)` -> `(A)`, losing the operator name). Found by
   systematically testing every macro used across a real paper library (149
   unique names), not guessed.
+  The same goes for operators it drops outright (`\ker`, `\dim`,
+  `\gcd`, `\neg`, `\iff`, `\implies`, `\pmod{n}`, ...), and for the
+  space after operator names and relations that it glues away (`\sin x`
+  -> `sin x`, not `sinx`; `a \to b` -> `a → b`, not `a →b`).
 - **Real Unicode subscript/superscript characters** where every character
   in a `_{...}`/`^{...}` group has one (`x_{i}` -> `xᵢ`, `_{int}` ->
   `ᵢₙₜ`), falling back to the plain `_word` text pylatexenc would otherwise
