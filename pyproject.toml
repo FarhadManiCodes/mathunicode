@@ -1,7 +1,7 @@
 [project]
 name = "mathunicode"
-version = "0.2.0"
-description = "LaTeX -> readable Unicode approximation for terminals/editors, with fixes for macros pylatexenc silently drops or mishandles."
+version = "0.3.0"
+description = "LaTeX math -> one line of readable Unicode (via latex2mathml), plus finding math in Markdown."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
