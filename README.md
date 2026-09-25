@@ -17,13 +17,16 @@ pylatexenc doesn't do on its own:
   any Greek letter, so `u_{phy}` (missing `y`) stays as `u_phy`, never a
   partial conversion like `ᵤ_phy`.
 - **A guard against `$...$` false positives**: naive math-span detection
-  (this package's own `convert_math_spans`, and confirmed directly via a
-  live tree-sitter-markdown parse, `render-markdown.nvim`'s own inline-math
-  grammar) pairs the first `$` with whichever `$` comes next, regardless of
-  content -- "costs `$50` ... `$100`" reads as one math span. Multi-word
-  prose with no macro or sub/superscript marker is detected and returned
-  with its `$` signs restored, rather than silently losing the currency
-  marks once concealed.
+  (and, confirmed directly via a live tree-sitter-markdown parse,
+  `render-markdown.nvim`'s own inline-math grammar) pairs the first `$` with
+  whichever `$` comes next, regardless of content -- "costs `$50` ...
+  `$100`" reads as one math span. `convert_math_spans` pairs `$...$` by
+  Pandoc's rule (no space just inside either `$`, and a span starting with
+  a digit can't close right before another digit), plus the padded forms
+  OCR tools write (`$ x _ {i} $`); it skips `$` inside Markdown code
+  (`` `echo $HOME` ``, fenced blocks); and multi-word prose with no macro or
+  sub/superscript marker is returned with its `$` signs restored rather
+  than silently losing the currency marks once concealed.
 
 Exposes both a Python API and CLIs (stdin -> stdout, no file-path
 arguments) so it's usable in-process by other tools (e.g.
@@ -58,6 +61,9 @@ collapse_math_blocks("before\n$$\nx_{i}\n$$\nafter")
   raw source and show the render in its place when the equation is written
   on one source line -- a block spanning three lines shows both side by
   side with no config fix available; this is the batch-fixable workaround.
+  Blocks inside fenced code, blocks with a `%` comment (joining the lines
+  would comment out the rest of the equation), and unclosed or empty blocks
+  are left unchanged; the collapsed line keeps the block's indentation.
 
 ## Tests
 
