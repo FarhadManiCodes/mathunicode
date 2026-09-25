@@ -844,3 +844,10 @@ def test_math_font_argument_ignores_spaces():
     assert latex_to_unicode("\\mathbf{\\alpha x}") == "α𝐱"
     # Text mode keeps its spaces.
     assert latex_to_unicode("\\text{if } x").split() == ["if", "x"]
+
+
+def test_ocr_array_cases_reads_as_cases():
+    text = "\\left\\{ \\begin{array}{ll} 1 & x > 0 \\\\ 0 & \\text{else} \\end{array} \\right."
+    assert latex_to_unicode(text) == "{1, x > 0; 0, else}"
+    # A set in braces is not cases.
+    assert latex_to_unicode("\\left\\{ \\begin{array}{c} a \\\\ b \\end{array} \\right\\}") == "{ a; b }"

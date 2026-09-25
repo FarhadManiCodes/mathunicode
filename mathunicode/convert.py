@@ -362,12 +362,24 @@ def _drop_math_font_spaces(tex: str) -> str:
     return _MATH_FONT_ARGUMENT.sub(_drop, tex)
 
 
+# How OCR tools (MinerU) write cases: an array opened by '\\left\\{' and
+# closed by the invisible '\\right.' (176 spans in the paper library). Read
+# as cases, it gets the cases notation ('{1, x>0; 0, else}') instead of an
+# array's bare rows.
+_ARRAY_AS_CASES = re.compile(
+    r"\\left\s*\\\{\s*\\begin\s*\{array\}\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}"
+    r"(?P<body>.*?)\\end\s*\{array\}\s*\\right\s*\.",
+    re.DOTALL,
+)
+
+
 def _join_source_lines(tex: str) -> str:
     """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
     come from '\\\\', never from source line breaks, so the source is joined
     onto one line -- comments first, or joining would let a comment swallow
     the lines after it (pylatexenc drops comments anyway)."""
     tex = _SOURCE_NEWLINE.sub(" ", _TEX_COMMENT.sub("", tex))
+    tex = _ARRAY_AS_CASES.sub(r"\\begin{cases}\g<body>\\end{cases}", tex)
     tex = _NULL_DELIMITER.sub("", tex)
     return _POSITION_ARGUMENT.sub(r"\1", tex)
 
