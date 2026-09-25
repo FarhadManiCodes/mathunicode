@@ -9,6 +9,8 @@ library (149 unique macro names), not guessed.
 """
 
 import re
+from bisect import bisect_left
+from collections import defaultdict, deque
 
 from pylatexenc import latexwalker, macrospec
 from pylatexenc.latex2text import (
@@ -274,7 +276,7 @@ def _convert(tex: str) -> str:
 
 
 # Math spans, tried in order at each position. '\x01' is excluded from span
-# bodies so a span never reaches into a masked code region (see _CODE).
+# bodies so a span never reaches into a masked code region (see _mask_code).
 _MATH_SPAN = re.compile(
     # $$...$$ display math, possibly multi-line.
     r"(?<!\\)\$\$(?P<display>[^\x01]+?)(?<!\\)\$\$"
@@ -293,17 +295,67 @@ _MATH_SPAN = re.compile(
     r"|(?<!\\)\$(?P<tail>(?=[^\s$\d])(?=[^\n$\x01]*?(?:\\[A-Za-z]|[_^]\{))[^\n$\x01]*?[^\s\\$\x01])[ \t]+\$"
 )
 
-# Markdown code, whose '$'s are never math: fenced blocks (closed by a fence
-# of the same character at least as long, or running to the end of the text
-# if unclosed) and inline code spans (closed by a backtick run of the same
-# length, within one paragraph).
-_CODE = re.compile(
-    r"^ {0,3}(?P<fence>(?P<char>[`~])(?P=char){2,}).*?"
-    r"(?:^ {0,3}(?P=fence)(?P=char)*[ \t]*$|\Z)"
-    r"|(?P<ticks>`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)(?P=ticks)(?!`)",
+# A fenced code block: opened by 3+ backticks or tildes (a backtick fence's
+# info string can't itself contain a backtick -- '```ls``' on one line is an
+# inline code span, not a fence), closed by a fence of the same character at
+# least as long, or running to the end of the text if unclosed.
+_FENCED_CODE = re.compile(
+    r"^ {0,3}(?P<fence>(?P<bt>`{3,})(?=[^`\n]*$)|~{3,}).*?"
+    r"(?:^ {0,3}(?P=fence)(?(bt)`*|~*)[ \t]*$|\Z)",
     flags=re.MULTILINE | re.DOTALL,
 )
+_BACKTICKS = re.compile(r"`+")
+_BLANK_LINE = re.compile(r"\n[ \t]*\n")
 _CODE_PLACEHOLDER = re.compile(r"\x01(\d+)\x01")
+
+
+def _code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each inline code span: a backtick run closed by the
+    next run of the same length in the same paragraph (CommonMark). A linear
+    scan -- the equivalent regex backtracks badly on many unmatched runs."""
+    runs = [(m.start(), m.end()) for m in _BACKTICKS.finditer(text)]
+    later_runs: defaultdict[int, deque[int]] = defaultdict(deque)
+    for i, (start, end) in enumerate(runs):
+        later_runs[end - start].append(i)
+    breaks = [m.start() for m in _BLANK_LINE.finditer(text)]
+    spans = []
+    i = 0
+    while i < len(runs):
+        start, end = runs[i]
+        same_length = later_runs[end - start]
+        while same_length and same_length[0] <= i:
+            same_length.popleft()
+        if same_length:
+            j = same_length[0]
+            k = bisect_left(breaks, end)
+            if k == len(breaks) or breaks[k] >= runs[j][0]:
+                spans.append((start, runs[j][1]))
+                i = j + 1
+                continue
+        i += 1  # no closer in this paragraph: a literal backtick run
+    return spans
+
+
+def _mask_code(text: str, saved: list[str]) -> str:
+    """Replace Markdown code, whose '$'s are never math, with '\x01N\x01'
+    placeholders (originals appended to saved). Text that already contains
+    '\x01' is returned unmasked, since its placeholders would be ambiguous."""
+    if "\x01" in text:
+        return text
+
+    def _mask(code: str) -> str:
+        saved.append(code)
+        return f"\x01{len(saved) - 1}\x01"
+
+    text = _FENCED_CODE.sub(lambda m: _mask(m.group(0)), text)
+    out = []
+    pos = 0
+    for start, end in _code_span_ranges(text):
+        out.append(text[pos:start])
+        out.append(_mask(text[start:end]))
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def convert_math_spans(text: str) -> str:
@@ -323,12 +375,7 @@ def convert_math_spans(text: str) -> str:
     '$' inside Markdown code (`...` spans, ```/~~~ fences), e.g. `echo $HOME`.
     """
     saved: list[str] = []
-
-    def _mask(m: re.Match[str]) -> str:
-        saved.append(m.group(0))
-        return f"\x01{len(saved) - 1}\x01"
-
-    text = _CODE.sub(_mask, text)
+    text = _mask_code(text, saved)
     out: list[str] = []
     pos = 0
     while m := _MATH_SPAN.search(text, pos):
@@ -351,11 +398,13 @@ def convert_math_spans(text: str) -> str:
         pos = m.end()
     out.append(text[pos:])
     text = "".join(out)
+    if not saved:
+        return text
     return _CODE_PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], text)
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 _TEX_COMMENT = re.compile(r"(?<!\\)%")
 
 

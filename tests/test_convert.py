@@ -513,3 +513,26 @@ def test_word_operator_before_norm():
 
 def test_colon_macro_not_dropped():
     assert latex_to_unicode("f\\colon X\\to Y") == "f:X→Y"
+
+
+def test_one_line_triple_backticks_are_a_code_span_not_a_fence():
+    # A backtick fence's info string can't contain backticks, so this is an
+    # inline code span -- treating it as an unclosed fence masked everything
+    # after it.
+    text = "```ls $HOME``` then $x^2$\n\nlater $y_1$"
+    assert convert_math_spans(text) == "```ls $HOME``` then x²\n\nlater y₁"
+    assert collapse_math_blocks("```x```\n$$\na\n$$") == "```x```\n$$ a $$"
+
+
+def test_convert_math_spans_input_containing_mask_sentinel():
+    # '\x01' is the code-mask sentinel; input already holding it used to crash.
+    assert convert_math_spans("\x010\x01 and $x$") == "\x010\x01 and x"
+
+
+def test_convert_math_spans_many_backtick_runs_is_fast():
+    import time
+
+    text = " ".join("`" * k for k in range(1, 400))
+    start = time.perf_counter()
+    assert convert_math_spans(text) == text
+    assert time.perf_counter() - start < 1.0
