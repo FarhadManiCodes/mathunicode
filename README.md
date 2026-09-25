@@ -41,7 +41,8 @@ collapse_math_blocks("before\n$$\nx_{i}\n$$\nafter")  # "before\n$$ x_{i} $$\naf
    `n!`, `a := b`, `σ²/N`, `1/B 1/N`. A leading sign attaches (`−x`), nothing
    is spaced before punctuation, an operator name hugs its argument
    (`det(A)`, `log₂(n)`) while limits set in a line don't run into it
-   (`∑ᵢ₌₁ᵐ (…)`), and an upright word never touches a letter (`if x`).
+   (`∑ᵢ₌₁ᵐ (…)`), and a letter never touches an upright word or a written-out
+   script (`if x`, `β^FR pₖ`).
 5. **LaTeX's own semantics**: source whitespace and comments don't render;
    fonts map to Unicode alphabets (`𝐱`, `𝒖`, `ℝ`, `ℋ`); accents become
    combining marks on short bases (`x̂`, `A̅B̅`). Nothing is dropped: an

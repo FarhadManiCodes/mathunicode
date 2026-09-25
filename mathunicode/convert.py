@@ -191,7 +191,8 @@ def _render_row(kids) -> str:
             text = _render(node)
             # An operator name hugs its argument ('det(A)', 'log₂(n)'); a big operator with limits
             # ('∑ᵢ₌₁ᵐ (…)') or a name whose limits are written out ('lim_(ϵ → 0) (…)') is spaced
-            # from what follows -- set in a line, the two would run together.
+            # from what follows -- set in a line, the two would run together. For the same reason a
+            # letter never touches a word or a written-out script ('if x', 'β^FR p').
             op, scripted = left is not None and left[0] == "Op", left is not None and left[1].tag in _SCRIPTS
             name = op and _text(left[1][0] if scripted else left[1]).isalpha()
             limits = op and scripted and (not name or bool(re.search(r"[_^]", left[2])))  # not in Unicode scripts
@@ -199,7 +200,7 @@ def _render_row(kids) -> str:
             touching = left is not None and left[2][-1:].isalnum() and text[:1].isalnum()
             spaced = left is not None and left[0] != "Sign" and not applied and (
                 limits or _SPACING[left[0]][_ORDER.index("Ord" if cls == "Sign" else cls)] == "1"
-                or (touching and (_word(left[1]) or _word(node))))
+                or (touching and (_word(left[1]) or _word(node) or bool(re.search(r"[_^]\w+$", left[2])))))
             line, left = line + (" " if spaced else "") + text, (cls, node, text)
         if line.strip():
             lines.append(re.sub(r"\s+", " ", line).strip())

@@ -55,6 +55,7 @@ def test_rows(tex, expected):
     "\\operatorname{tr}(A)": "tr(A)", "\\|x\\|^2": "‖x‖²", "|a| + |b|": "|a| + |b|",
     "\\det \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} = ad - bc": "det|a, b; c, d| = ad − bc",
     "\\int_0^1 f(x)\\,dx": "∫₀¹ f(x) dx", "\\mathrm{if} x > t": "if x > t",
+    "\\beta^{\\mathrm{FR}} p_k": "β^FR pₖ", "n_{\\text{cows}} q": "n_cows q", "x^{i_j} y": "x^(iⱼ)y",
     # TeX's atom classes: punctuation, postfix, relation pairs, binary operators whatever the tag
     "x.": "x.", "n!": "n!", "a := b": "a := b", "a \\pm b": "a ± b", "\\sigma^2/N": "σ²/N",
     "\\frac1B\\frac1N": "1/B 1/N", "u(0, x) = -\\sin(\\pi x)": "u(0, x) = −sin(πx)", "x \\le -\\gamma": "x ≤ −γ",
