@@ -90,7 +90,7 @@ def _build_context_db():
             MacroTextSpec("implies", simplify_repl="⟹"),
             MacroTextSpec("impliedby", simplify_repl="⟸"),
             MacroTextSpec("gets", simplify_repl="←"),
-            MacroTextSpec("colon", simplify_repl=": "),
+            MacroTextSpec("colon", simplify_repl=":"),
             MacroTextSpec("colonequals", simplify_repl=":="),
             MacroTextSpec("coloneq", simplify_repl=":="),
             MacroTextSpec("eqqcolon", simplify_repl="=:"),
@@ -199,13 +199,24 @@ _SPACED_MACRO = re.compile(
 )
 
 
-# '\colon' is set like punctuation, 'f: X': no space before, one after (its
-# replacement text supplies that). A control space '\ ' before it is kept.
-_SPACE_BEFORE_COLON = re.compile(r"(?<!(?<!\\)\\)\s+(?=\\colon(?![A-Za-z]))")
+# '\colon' is set like punctuation, 'f: X': no space before it, and one after
+# (as a control space '\ ') unless nothing follows. A control space before it
+# is kept.
+_SPACED_COLON = re.compile(r"(?:(?<!(?<!\\)\\)\s+)?\\colon(?![A-Za-z])\s*(?P<next>[^\s}]?)")
+
+# In math mode LaTeX ignores spaces around the thin/medium/thick/negative
+# space macros, but pylatexenc prints them next to theirs: 'x\,\to\, y' ->
+# 'x →  y'. An escaped backslash ('\\,': line break, comma) isn't one, and a
+# control space '\ ' before one is kept. Leading whitespace is matched only
+# from the start of its run, which keeps this linear.
+_SPACE_AROUND_SPACING_MACRO = re.compile(r"(?:(?<![\s\\])\s+)?(?<!(?<!\\)\\)(\\[,;:!])\s*")
 
 
 def _keep_space_after_macros(tex: str) -> str:
-    tex = _SPACE_BEFORE_COLON.sub("", tex)
+    tex = _SPACE_AROUND_SPACING_MACRO.sub(r"\1", tex)
+    tex = _SPACED_COLON.sub(
+        lambda m: "\\colon" + ("\\ " + m.group("next") if m.group("next") else ""), tex
+    )
     return _SPACED_MACRO.sub(lambda m: m.group(0) + "{}", tex)
 
 

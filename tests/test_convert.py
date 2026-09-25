@@ -597,3 +597,18 @@ def test_labelled_arrows_and_binomials():
     # '\binom{n}{k}' gave 'nk'.
     assert latex_to_unicode("\\binom{n}{k}") == "C(n,k)"
     assert latex_to_unicode("\\dbinom nk") == "C(n,k)"
+
+
+def test_no_doubled_space_around_spacing_macros():
+    # Math mode ignores spaces next to '\,' '\;' '\:' '\!'; pylatexenc printed
+    # them as well as the macro's own space.
+    assert latex_to_unicode("x\\,\\to\\, y") == "x → y"
+    assert latex_to_unicode("\\int f(x) \\, d x") == "∫f(x) d x"
+    assert latex_to_unicode("a \\; b") == "a b"
+    # '\\,' is a line break followed by a comma, not a thin space.
+    assert latex_to_unicode("a\\\\, b") == "a\n, b"
+
+
+def test_colon_at_end_has_no_trailing_space():
+    assert latex_to_unicode("f\\colon") == "f:"
+    assert latex_to_unicode("f\\colon\\mathbb{R}\\to\\mathbb{R}") == "f: ℝ→ℝ"
