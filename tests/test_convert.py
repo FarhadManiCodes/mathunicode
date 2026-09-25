@@ -835,3 +835,12 @@ def test_dots_only_span_is_syntax_not_math():
     # Operators are real math.
     assert latex_to_unicode("+") == "+"
     assert latex_to_unicode("\\ldots") == "…"
+
+
+def test_math_font_argument_ignores_spaces():
+    # OCR spaces out letters inside math fonts; math mode ignores them.
+    assert latex_to_unicode("\\operatorname{V a r}(X)") == "Var(X)"
+    assert latex_to_unicode("\\mathrm{a r g m i n}_x f") == "argminₓ f"
+    assert latex_to_unicode("\\mathbf{\\alpha x}") == "α𝐱"
+    # Text mode keeps its spaces.
+    assert latex_to_unicode("\\text{if } x").split() == ["if", "x"]

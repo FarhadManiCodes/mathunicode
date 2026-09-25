@@ -340,6 +340,28 @@ _NULL_DELIMITER = re.compile(r"\\(?:left|right|[bB]igg?[lr]?)\s*\.")
 _POSITION_ARGUMENT = re.compile(r"(\\begin\s*\{(?:aligned|gathered|alignedat)\})\s*\[[tbc]\]")
 
 
+# A math-font argument: math mode ignores spaces in it, so '\\mathrm{V a r}'
+# is typeset 'Var' -- OCR tools space out every letter there (2,229 spans in
+# the paper library). Text-mode macros (\\text, \\mbox) keep their spaces.
+_MATH_FONT_ARGUMENT = re.compile(
+    r"(\\(?:mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|mathscr"
+    r"|boldsymbol|operatorname)\*?\s*\{)([^{}]*)\}"
+)
+
+
+def _drop_math_font_spaces(tex: str) -> str:
+    """'\\mathrm{a r g m i n}' -> '\\mathrm{argmin}'. The space after a macro
+    name inside the argument is kept: it ends the name ('\\alpha x')."""
+
+    def _drop(m: re.Match[str]) -> str:
+        parts = _MACRO_WITH_SPACE.split(m.group(2))
+        return m.group(1) + "".join(
+            part if i % 2 else "".join(part.split()) for i, part in enumerate(parts)
+        ) + "}"
+
+    return _MATH_FONT_ARGUMENT.sub(_drop, tex)
+
+
 def _join_source_lines(tex: str) -> str:
     """A newline in LaTeX source is only a space: 'a +\\nb' is 'a + b'. Rows
     come from '\\\\', never from source line breaks, so the source is joined
@@ -667,6 +689,7 @@ def _convert(tex: str) -> str:
     """The conversion pipeline without the prose guard or the fallback, for
     callers that apply both themselves."""
     tex = _join_source_lines(tex)
+    tex = _drop_math_font_spaces(tex)
     tex = _normalize_math_spacing(tex)
     tex = _keep_space_after_macros(tex)
     tex = _unicode_scripts(tex)
