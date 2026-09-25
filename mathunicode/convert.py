@@ -51,12 +51,26 @@ def _labelled_arrow(arrow: str, label_first: bool):
     return repl
 
 
+def _wide_accent(narrow_repl):
+    """Text for a wide accent ('\\overline{AB}'), which pylatexenc drops: the
+    narrow accent's combining mark on each character ('A̅B̅') for a short
+    alphanumeric argument, else the plain argument -- a mark on every
+    character of a long expression, spaces and scripts included, is noise."""
+
+    def repl(node, l2tobj) -> str:  # pylatexenc passes l2tobj by that name
+        args = [a for a in node.nodeargd.argnlist if a is not None]
+        text = l2tobj.nodelist_to_text(args)
+        if len(text) <= 3 and text.isalnum():
+            return narrow_repl(node, l2tobj=l2tobj)
+        return text
+
+    return repl
+
+
 def _build_context_db():
     db = get_default_latex_context_db()
-    # Wide accents drawn like their narrow forms, as combining marks on each
-    # character ('\\overline{AB}' -> 'A̅B̅'); pylatexenc drops the accent.
     wide_accents = [
-        MacroTextSpec(wide, simplify_repl=db.get_macro_spec(narrow).simplify_repl)
+        MacroTextSpec(wide, simplify_repl=_wide_accent(db.get_macro_spec(narrow).simplify_repl))
         for wide, narrow in (("overline", "bar"), ("widetilde", "tilde"), ("widehat", "hat"))
     ]
     db.add_context_category(

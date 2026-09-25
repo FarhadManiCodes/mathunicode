@@ -612,3 +612,9 @@ def test_no_doubled_space_around_spacing_macros():
 def test_colon_at_end_has_no_trailing_space():
     assert latex_to_unicode("f\\colon") == "f:"
     assert latex_to_unicode("f\\colon\\mathbb{R}\\to\\mathbb{R}") == "f: ℝ→ℝ"
+
+
+def test_wide_accent_on_long_argument_stays_plain():
+    # A mark on every character of a long expression is noise.
+    assert latex_to_unicode("\\overline{x+y}") == "x+y"
+    assert latex_to_unicode("\\overline{{u_{1}^{\\prime} c^{\\prime}}}") == "u₁^' c^'"
