@@ -640,3 +640,13 @@ def test_wide_accent_on_greek_and_bold_letters():
     assert latex_to_unicode("\\overline{\\Delta r}") == "Δ̅r̅"
     assert latex_to_unicode("\\widehat{\\mathbf{FL}}") == "𝐅̂𝐋̂"
     assert latex_to_unicode("\\overline{x_i}") == "xᵢ"
+
+
+def test_convert_math_spans_crlf_line_endings():
+    # The fence closer and paragraph breaks must allow '\r'.
+    text = "```\r\n$a$\r\n```\r\nthen $x^2$\r\n"
+    assert convert_math_spans(text) == "```\r\n$a$\r\n```\r\nthen x²\r\n"
+    text = "~~~\r\n$a$\r\n~~~\r\nthen $x^2$\r\n"
+    assert convert_math_spans(text) == "~~~\r\n$a$\r\n~~~\r\nthen x²\r\n"
+    # A code span can't cross a CRLF blank line.
+    assert convert_math_spans("`a\r\n\r\nb` $x_1$ `c") == "`a\r\n\r\nb` $x_1$ `c"

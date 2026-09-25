@@ -421,14 +421,15 @@ _FENCE_CLOSE_PREFIX = r"[ \t]*(?:>[ \t]?)*"
 # A fenced code block: opened by 3+ backticks or tildes (a backtick fence's
 # info string can't itself contain a backtick -- '```ls``' on one line is an
 # inline code span, not a fence), closed by a fence of the same character at
-# least as long, or running to the end of the text if unclosed.
+# least as long, or running to the end of the text if unclosed. Lines may end
+# in CRLF.
 _FENCED_CODE = re.compile(
     rf"^{_FENCE_OPEN_PREFIX}(?P<fence>(?P<bt>`{{3,}})(?=[^`\n]*$)|~{{3,}}).*?"
-    rf"(?:^{_FENCE_CLOSE_PREFIX}(?P=fence)(?(bt)`*|~*)[ \t]*$|\Z)",
+    rf"(?:^{_FENCE_CLOSE_PREFIX}(?P=fence)(?(bt)`*|~*)[ \t]*\r?$|\Z)",
     flags=re.MULTILINE | re.DOTALL,
 )
 _BACKTICKS = re.compile(r"`+")
-_BLANK_LINE = re.compile(r"\n[ \t]*\n")
+_BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
 _CODE_PLACEHOLDER = re.compile(r"\x01(\d+)\x01")
 
 
