@@ -559,3 +559,23 @@ def test_relation_after_alignment_or_spacing_macro():
 def test_colon_keeps_control_space_before_it():
     # Stripping the space of '\ ' turned '\ \colon' into '\\colon'.
     assert "colon" not in latex_to_unicode("x\\ \\colon y")
+
+
+def test_latex_to_unicode_dropped_symbols_batch_two():
+    # Also dropped entirely by pylatexenc; all used in the paper library.
+    cases = {
+        "a \\models b": "a ⊨ b",
+        "\\varSigma": "Σ",
+        "\\varPhi": "Φ",
+        "\\varOmega_i": "Ωᵢ",
+        "\\Box p": "□p",
+        "\\checkmark": "✓",
+        "\\ddagger": "‡",
+        "(a)\\bot(b)": "(a)⊥(b)",
+        "\\llbracket x\\rrbracket": "⟦x⟧",
+        "\\S 3": "§3",
+        "a \\colonequals b": "a := b",
+        "a \\eqqcolon b": "a =: b",
+    }
+    for tex, expected in cases.items():
+        assert latex_to_unicode(tex) == expected, tex

@@ -67,6 +67,30 @@ def _build_context_db():
             MacroTextSpec("impliedby", simplify_repl="⟸"),
             MacroTextSpec("gets", simplify_repl="←"),
             MacroTextSpec("colon", simplify_repl=": "),
+            MacroTextSpec("colonequals", simplify_repl=":="),
+            MacroTextSpec("coloneq", simplify_repl=":="),
+            MacroTextSpec("eqqcolon", simplify_repl="=:"),
+            MacroTextSpec("eqcolon", simplify_repl="=:"),
+            MacroTextSpec("Coloneqq", simplify_repl="::="),
+            MacroTextSpec("models", simplify_repl="⊨"),
+            MacroTextSpec("vDash", simplify_repl="⊨"),
+            MacroTextSpec("bot", simplify_repl="⊥"),
+            MacroTextSpec("Box", simplify_repl="□"),
+            MacroTextSpec("Diamond", simplify_repl="◇"),
+            MacroTextSpec("checkmark", simplify_repl="✓"),
+            MacroTextSpec("ddagger", simplify_repl="‡"),
+            MacroTextSpec("llbracket", simplify_repl="⟦"),
+            MacroTextSpec("rrbracket", simplify_repl="⟧"),
+            MacroTextSpec("S", simplify_repl="§"),
+            MacroTextSpec("P", simplify_repl="¶"),
+            # amsmath's italic capital Greek; plain Unicode has only upright.
+            *(
+                MacroTextSpec("var" + name, simplify_repl=char)
+                for name, char in zip(
+                    "Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega".split(),
+                    "ΓΔΘΛΞΠΣΥΦΨΩ",
+                )
+            ),
         ],
     )
     return db
@@ -125,7 +149,8 @@ _RELATIONS = (
     "Leftrightarrow longrightarrow longleftarrow Longrightarrow Longleftarrow "
     "implies impliedby iff in notin ni subset subseteq supset supseteq "
     "le leq ge geq ne neq ll gg approx equiv sim simeq cong propto perp mid "
-    "parallel coloneqq land lor wedge vee cdot times div pm mp circ cup cap "
+    "parallel coloneqq colonequals coloneq eqqcolon eqcolon Coloneqq models vDash "
+    "land lor wedge vee cdot times div pm mp circ cup cap "
     "setminus oplus otimes"
 )
 # Both lookaheads start with whitespace, so only whole macro names match
