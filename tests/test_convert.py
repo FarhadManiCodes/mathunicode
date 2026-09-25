@@ -618,3 +618,19 @@ def test_wide_accent_on_long_argument_stays_plain():
     # A mark on every character of a long expression is noise.
     assert latex_to_unicode("\\overline{x+y}") == "x+y"
     assert latex_to_unicode("\\overline{{u_{1}^{\\prime} c^{\\prime}}}") == "u₁^' c^'"
+
+
+def test_argument_macros_tolerate_missing_arguments():
+    # Truncated or OCR-broken input: no '%s' leaking into the output, and no
+    # raw fallback for the whole expression.
+    assert latex_to_unicode("\\binom{n}") == "n"
+    assert latex_to_unicode("a \\pmod") == "a mod"
+    assert latex_to_unicode("x + \\xrightarrow") == "x + →"
+    assert latex_to_unicode("a + \\overline") == "a + "
+
+
+def test_wide_accent_skips_scripted_arguments():
+    # The mark would land on the sub/superscript characters too.
+    assert latex_to_unicode("\\overline{x_1}") == "x₁"
+    assert latex_to_unicode("\\overline{x^2}") == "x²"
+    assert latex_to_unicode("\\overline{\\alpha}") == "α̅"

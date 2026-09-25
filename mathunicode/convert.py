@@ -36,14 +36,26 @@ def _build_parse_db():
     return db
 
 
+# The callables below get pylatexenc's converter as 'l2tobj' (it passes it by
+# that name). Each tolerates missing arguments -- truncated or OCR-broken
+# input like a bare '\\binom' -- rather than raising, which would make the
+# whole expression fall back to raw text.
+
+
+def _arg_texts(node, l2tobj) -> list[str]:
+    """Converted text of each argument slot ('' for a missing one)."""
+    args = getattr(node.nodeargd, "argnlist", None) or []
+    return [l2tobj.nodelist_to_text([a]).strip() if a is not None else "" for a in args]
+
+
 def _labelled_arrow(arrow: str, label_first: bool):
     """Text for '\\xrightarrow[below]{above}': the 'above' label drawn on the
     arrow's tail, '-f→' (or '←f-' for a left arrow); a bare arrow without
     one. The rarer 'below' label is dropped."""
 
-    def repl(node, l2tobj) -> str:  # pylatexenc passes l2tobj by that name
-        above = node.nodeargd.argnlist[1]
-        label = l2tobj.nodelist_to_text([above]).strip() if above is not None else ""
+    def repl(node, l2tobj) -> str:
+        texts = _arg_texts(node, l2tobj)
+        label = texts[1] if len(texts) > 1 else ""
         if not label:
             return arrow
         return f"-{label}{arrow}" if label_first else f"{arrow}{label}-"
@@ -53,18 +65,32 @@ def _labelled_arrow(arrow: str, label_first: bool):
 
 def _wide_accent(narrow_repl):
     """Text for a wide accent ('\\overline{AB}'), which pylatexenc drops: the
-    narrow accent's combining mark on each character ('A̅B̅') for a short
-    alphanumeric argument, else the plain argument -- a mark on every
-    character of a long expression, spaces and scripts included, is noise."""
+    narrow accent's combining mark on each character ('A̅B̅') for a single
+    character or up to 3 ASCII letters/digits, else the plain argument -- a
+    mark on every character of a longer expression, spaces and scripts
+    included, is noise."""
 
-    def repl(node, l2tobj) -> str:  # pylatexenc passes l2tobj by that name
-        args = [a for a in node.nodeargd.argnlist if a is not None]
-        text = l2tobj.nodelist_to_text(args)
-        if len(text) <= 3 and text.isalnum():
+    def repl(node, l2tobj) -> str:
+        text = "".join(_arg_texts(node, l2tobj))
+        if len(text) == 1 or (0 < len(text) <= 3 and text.isascii() and text.isalnum()):
             return narrow_repl(node, l2tobj=l2tobj)
         return text
 
     return repl
+
+
+def _binom(node, l2tobj) -> str:
+    """'\\binom{n}{k}' -> 'C(n,k)'; with an argument missing, just what's there."""
+    texts = _arg_texts(node, l2tobj)
+    if len(texts) == 2 and all(texts):
+        return f"C({texts[0]},{texts[1]})"
+    return " ".join(t for t in texts if t)
+
+
+def _pmod(node, l2tobj) -> str:
+    """'\\pmod{n}' -> '(mod n)'; a bare 'mod' with its argument missing."""
+    texts = _arg_texts(node, l2tobj)
+    return f"(mod {texts[0]})" if texts and texts[0] else "mod"
 
 
 def _build_context_db():
@@ -97,7 +123,7 @@ def _build_context_db():
             MacroTextSpec("hom", simplify_repl="hom"),
             MacroTextSpec("mod", simplify_repl="mod"),
             MacroTextSpec("bmod", simplify_repl="mod"),
-            MacroTextSpec("pmod", simplify_repl="(mod %s)"),
+            MacroTextSpec("pmod", simplify_repl=_pmod),
             MacroTextSpec("lor", simplify_repl="∨"),
             MacroTextSpec("neg", simplify_repl="¬"),
             MacroTextSpec("iff", simplify_repl="⟺"),
@@ -125,7 +151,7 @@ def _build_context_db():
             MacroTextSpec("xrightarrow", simplify_repl=_labelled_arrow("→", label_first=True)),
             MacroTextSpec("xleftarrow", simplify_repl=_labelled_arrow("←", label_first=False)),
             *(
-                MacroTextSpec(name, simplify_repl="C(%s,%s)")
+                MacroTextSpec(name, simplify_repl=_binom)
                 for name in ("binom", "dbinom", "tbinom")
             ),
             # amsmath's italic capital Greek; plain Unicode has only upright.
@@ -216,7 +242,7 @@ _SPACED_MACRO = re.compile(
 # '\colon' is set like punctuation, 'f: X': no space before it, and one after
 # (as a control space '\ ') unless nothing follows. A control space before it
 # is kept.
-_SPACED_COLON = re.compile(r"(?:(?<!(?<!\\)\\)\s+)?\\colon(?![A-Za-z])\s*(?P<next>[^\s}]?)")
+_SPACED_COLON = re.compile(r"(?:(?<![\s\\])\s+)?\\colon(?![A-Za-z])\s*(?P<next>[^\s}]?)")
 
 # In math mode LaTeX ignores spaces around the thin/medium/thick/negative
 # space macros, but pylatexenc prints them next to theirs: 'x\,\to\, y' ->
