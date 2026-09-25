@@ -458,3 +458,42 @@ def test_convert_math_spans_skips_fenced_code():
     assert convert_math_spans("~~~~\n```\n$a$\n~~~~\n$b^2$") == "~~~~\n```\n$a$\n~~~~\nb²"
     # An unclosed fence runs to the end of the text.
     assert convert_math_spans("```\n$a$") == "```\n$a$"
+
+
+# ---------------------------------------------------------------------------
+# Spacing after operator names and relations
+# ---------------------------------------------------------------------------
+
+
+def test_space_kept_after_word_operators():
+    # pylatexenc glued these into one word: 'sinx', 'detA', 'cost'.
+    assert latex_to_unicode("\\sin x") == "sin x"
+    assert latex_to_unicode("\\det A") == "det A"
+    assert latex_to_unicode("1 - \\cos t") == "1 - cos t"
+    assert latex_to_unicode("\\log \\alpha") == "log α"
+    assert latex_to_unicode("a \\bmod n") == "a mod n"
+
+
+def test_space_kept_after_relations():
+    assert latex_to_unicode("a \\to b") == "a → b"
+    assert latex_to_unicode("x \\in [0,1]") == "x ∈ [0,1]"
+    assert latex_to_unicode("a \\le b") == "a ≤ b"
+    assert latex_to_unicode("p \\land q") == "p ∧ q"
+    assert latex_to_unicode("x \\coloneqq y") == "x := y"
+    assert latex_to_unicode("\\mathbf {u} \\otimes \\mathbf {u}") == "𝐮 ⊗ 𝐮"
+
+
+def test_other_macros_stay_tight():
+    # Greek letters and other symbols: 'Δt', not 'Δ t'.
+    assert latex_to_unicode("\\Delta t") == "Δt"
+    assert latex_to_unicode("\\alpha x") == "αx"
+    assert latex_to_unicode("\\nabla f") == "∇f"
+    # '\in' must not match inside '\int'.
+    assert latex_to_unicode("\\int x") == "∫x"
+
+
+def test_no_space_added_where_source_has_none():
+    assert latex_to_unicode("\\exp(x)") == "exp(x)"
+    assert latex_to_unicode("\\sin\\theta") == "sinθ"
+    assert latex_to_unicode("\\max_i x_i") == "maxᵢ xᵢ"
+    assert latex_to_unicode("\\sin \\left( x \\right)") == "sin( x )"

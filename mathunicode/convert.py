@@ -38,8 +38,8 @@ def _build_context_db():
         prepend=True,
         macros=[
             MacroTextSpec("|", simplify_repl="‖"),
-            MacroTextSpec("coloneqq", simplify_repl=":= "),
-            MacroTextSpec("land", simplify_repl="∧ "),
+            MacroTextSpec("coloneqq", simplify_repl=":="),
+            MacroTextSpec("land", simplify_repl="∧"),
             MacroTextSpec("arg", simplify_repl="arg"),
             MacroTextSpec("Pr", simplify_repl="Pr"),
             MacroTextSpec("circledR", simplify_repl="®"),
@@ -102,6 +102,41 @@ def _normalize_math_spacing(tex: str) -> str:
         return m.group(1) + _LETTER_GAP.sub("", m.group(2)) + "}"
 
     return _SPACED_GROUP.sub(_collapse, tex)
+
+
+# pylatexenc drops the whitespace after a macro, gluing its output to what
+# follows: '\sin x' -> 'sinx', 'a \to b' -> 'a →b'. For operator names and
+# relation/arrow/binary-operator symbols, where that space matters, it's kept
+# by ending the macro name with '{}' ('\sin{} x' -> 'sin x'). Other macros
+# (Greek letters, \nabla, ...) stay tight: '\Delta t' -> 'Δt' reads better
+# than 'Δ t' in OCR output that spaces every token.
+_WORD_OPERATORS = (
+    "sin cos tan cot sec csc sinh cosh tanh coth arcsin arccos arctan "
+    "arg deg det dim exp gcd hom inf ker lg lim liminf limsup ln log max min "
+    "Pr sup mod bmod"
+)
+_RELATIONS = (
+    "to gets mapsto rightarrow leftarrow leftrightarrow Rightarrow Leftarrow "
+    "Leftrightarrow longrightarrow longleftarrow Longrightarrow Longleftarrow "
+    "implies impliedby iff in notin ni subset subseteq supset supseteq "
+    "le leq ge geq ne neq ll gg approx equiv sim simeq cong propto perp mid "
+    "parallel coloneqq land lor wedge vee cdot times div pm mp circ cup cap "
+    "setminus oplus otimes"
+)
+# Both lookaheads start with whitespace, so only whole macro names match
+# ('\in' never matches inside '\int').
+_SPACED_MACRO = re.compile(
+    # A word operator before a letter, digit or macro -- '\sin x', '\log \alpha'
+    # but not '\exp (x)' or '\sin \left(', where the space is OCR noise.
+    rf"\\(?:{'|'.join(_WORD_OPERATORS.split())})"
+    r"(?=\s+(?:[A-Za-z0-9]|\\(?!left|right|[bB]igg?[lr]?\b)[A-Za-z]))"
+    # A relation before anything but a script marker or closing brace.
+    rf"|\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
+)
+
+
+def _keep_space_after_macros(tex: str) -> str:
+    return _SPACED_MACRO.sub(lambda m: m.group(0) + "{}", tex)
 
 
 # Unicode has no dedicated subscript/superscript glyph for every character --
@@ -226,6 +261,7 @@ def _convert(tex: str) -> str:
     """The conversion pipeline without the prose guard or the fallback, for
     callers that apply both themselves."""
     tex = _normalize_math_spacing(tex)
+    tex = _keep_space_after_macros(tex)
     tex = _unicode_scripts(tex)
     # A fresh LatexNodes2Text per call, not a shared one: inside math nodes it
     # temporarily overwrites its own strict_latex_spaces, so concurrent calls
