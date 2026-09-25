@@ -21,9 +21,9 @@ _ACCENTS = {"^": "̂", "ˆ": "̂", "‾": "̅", "―": "̅", "¯": "̅", "~": "�
             "˜": "̃", "˙": "̇", "¨": "̈", "→": "⃗", "ˇ": "̌", "˘": "̆",
             "⏟": "", "⏞": "", "︸": "", "︷": ""}
 # LaTeX's control symbols in text: an accent marks the next letter (\'e, \"{i}), a spacing one is a
-# space (\! a negative one) and any other prints its character (\_ is _).
+# space (\! \/ \- \@ have no width) and any other prints its character (\_ is _).
 _TEXT_ACCENTS = dict(zip("'\"^~`=.", "\u0301\u0308\u0302\u0303\u0300\u0304\u0307", strict=True))
-_TEXT_SPACES = dict.fromkeys(",;:\\ \xa0", " ") | {"!": ""}
+_TEXT_SPACES = dict.fromkeys(",;:\\ \xa0", " ") | dict.fromkeys("!/-@", "")
 _CONTROL_SYMBOL = re.compile(rf"\\([{re.escape(''.join(_TEXT_ACCENTS))}])\{{?(\w)\}}?|\\([^A-Za-z])")
 _SCRIPTS = ("msub", "msup", "msubsup", "munder", "mover", "munderover")
 

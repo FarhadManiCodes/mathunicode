@@ -78,6 +78,7 @@ def test_spacing(tex, expected):
     "\\mathbb {R} ^ {2}": "ℝ²", "\\mathcal {H}": "ℋ", "\\sech x": "sech x", "\\boldsymbol{\\Theta}": "𝜣",
     # control symbols in text: accents mark a letter, spacing is a space, the rest print
     "\\text{caf\\'e na\\\"ive}": "café naïve", "\\text{a\\,b\\;c\\!d\\\\e}": "a b cd e",
+    "\\text{co\\-op e.g.\\@ a\\/b}": "coop e.g. ab",
 })
 def test_latex_semantics(tex, expected):
     assert latex_to_unicode(tex) == expected
