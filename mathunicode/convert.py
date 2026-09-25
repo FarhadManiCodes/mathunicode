@@ -64,6 +64,7 @@ def _build_context_db():
             MacroTextSpec("implies", simplify_repl="⟹"),
             MacroTextSpec("impliedby", simplify_repl="⟸"),
             MacroTextSpec("gets", simplify_repl="←"),
+            MacroTextSpec("colon", simplify_repl=":"),
         ],
     )
     return db

@@ -509,3 +509,7 @@ def test_tight_relation_stays_tight():
 
 def test_word_operator_before_norm():
     assert latex_to_unicode("\\ln \\|x\\|") == "ln ‖x‖"
+
+
+def test_colon_macro_not_dropped():
+    assert latex_to_unicode("f\\colon X\\to Y") == "f:X→Y"
