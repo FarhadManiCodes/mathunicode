@@ -512,7 +512,9 @@ def test_word_operator_before_norm():
 
 
 def test_colon_macro_not_dropped():
-    assert latex_to_unicode("f\\colon X\\to Y") == "f:X→Y"
+    # Set like punctuation: no space before, one after.
+    assert latex_to_unicode("f\\colon X\\to Y") == "f: X→Y"
+    assert latex_to_unicode("f \\colon X \\to Y") == "f: X → Y"
 
 
 def test_one_line_triple_backticks_are_a_code_span_not_a_fence():
@@ -546,3 +548,9 @@ def test_fence_inside_list_item_or_blockquote():
     assert convert_math_spans("- ```\n  $a$\n  ```\n$b_1$") == "- ```\n  $a$\n  ```\nb₁"
     text = "1. ```\n   $$\n   x\n   $$\n   ```\n$$\ny\n$$"
     assert collapse_math_blocks(text) == "1. ```\n   $$\n   x\n   $$\n   ```\n$$ y $$"
+
+
+def test_relation_after_alignment_or_spacing_macro():
+    assert latex_to_unicode("x &\\leq y") == "x    ≤ y"
+    assert latex_to_unicode("x\\quad\\implies y") == "x  ⟹ y"
+    assert latex_to_unicode("x\;\\to y") == "x → y"

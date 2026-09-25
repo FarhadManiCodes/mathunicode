@@ -66,7 +66,7 @@ def _build_context_db():
             MacroTextSpec("implies", simplify_repl="⟹"),
             MacroTextSpec("impliedby", simplify_repl="⟸"),
             MacroTextSpec("gets", simplify_repl="←"),
-            MacroTextSpec("colon", simplify_repl=":"),
+            MacroTextSpec("colon", simplify_repl=": "),
         ],
     )
     return db
@@ -137,12 +137,19 @@ _SPACED_MACRO = re.compile(
     r"(?=\s+(?:[A-Za-z0-9]|\\\||\\(?!left|right|[bB]igg?[lr]?\b)[A-Za-z]))"
     # A relation spaced on both sides, before anything but a script marker or
     # closing brace. A tight 'a\leq b' stays 'a≤b': the space after '\leq'
-    # there only ends the macro name.
-    rf"|(?:(?<=\s)|^)\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
+    # there only ends the macro name. An alignment '&' or a spacing macro
+    # ('\quad', '\,', '~', ...) counts as the space before.
+    rf"|(?:(?<=[\s&~])|(?<=\\[,;:])|(?<=\\quad)|(?<=\\qquad)|^)\\(?:{'|'.join(_RELATIONS.split())})(?=\s+[^\s_^}}])"
 )
 
 
+# '\colon' is set like punctuation, 'f: X': no space before, one after (its
+# replacement text supplies that).
+_SPACE_BEFORE_COLON = re.compile(r"\s+(?=\\colon(?![A-Za-z]))")
+
+
 def _keep_space_after_macros(tex: str) -> str:
+    tex = _SPACE_BEFORE_COLON.sub("", tex)
     return _SPACED_MACRO.sub(lambda m: m.group(0) + "{}", tex)
 
 
