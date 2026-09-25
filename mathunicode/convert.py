@@ -8,9 +8,11 @@ Three layers, top to bottom:
    ``%s/%sa``). The fixes were found by running every macro used across a
    real paper library through the converter, not guessed.
 2. One expression (``latex_to_unicode``): pre-passes on the LaTeX source for
-   what pylatexenc can't do -- undo OCR spacing, keep the space after
-   operators and relations, real Unicode sub/superscripts -- then
-   pylatexenc.
+   what pylatexenc can't do -- source line breaks as spaces, undo OCR
+   spacing, keep the space after operators and relations, real Unicode
+   sub/superscripts -- then pylatexenc. The output is always one line:
+   multi-row constructs (matrices, cases, aligned, ``\\\\``) use a linear
+   notation, rows joined by '; ', so they compose with the math around them.
 3. A Markdown document (``convert_math_spans``, ``collapse_math_blocks``):
    finding the math -- which '$'s pair up, skipping code -- and converting
    or collapsing it in place.

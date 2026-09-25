@@ -4,7 +4,9 @@
 the stdin/stdout contract render-markdown.nvim's `converter` list expects
 of any named command (see its `Handler.convert()`: pipes text via stdin,
 reads stdout, checks exit code 0) -- so pointing that config at
-`mathunicode` needs no wrapper script.
+`mathunicode` needs no wrapper script. The output is always one line (see
+latex_to_unicode), so render-markdown shows it exactly in place of the
+concealed source.
 
 `mathunicode-collapse-blocks`: a whole document -> the same document with
 multi-line $$/content/$$ blocks collapsed to single-line form. Kept as a

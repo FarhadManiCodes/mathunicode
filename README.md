@@ -13,6 +13,12 @@ pylatexenc doesn't do on its own:
   `\gcd`, `\neg`, `\iff`, `\implies`, `\pmod{n}`, ...), and for the
   space after operator names and relations that it glues away (`\sin x`
   -> `sin x`, not `sinx`; `a \to b` -> `a → b`, not `a →b`).
+- **One line, whatever the input**: multi-row math has a linear notation
+  that composes with the math around it -- `(1 2; 3 4)` for a pmatrix,
+  `|a b; c d|` for a vmatrix, `{1, x>0; 0, else}` for cases, `a = b; c = d`
+  for aligned; a source line break is only a space, as in LaTeX. A true 2-D
+  layout would need a box-layout typesetter; rows as separate output lines
+  misalign as soon as anything surrounds the environment.
 - **Real Unicode subscript/superscript characters** where every character
   in a `_{...}`/`^{...}` group has one (`x_{i}` -> `xᵢ`, `_{int}` ->
   `ᵢₙₜ`), falling back to the plain `_word` text pylatexenc would otherwise
