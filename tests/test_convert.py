@@ -536,3 +536,13 @@ def test_convert_math_spans_many_backtick_runs_is_fast():
     start = time.perf_counter()
     assert convert_math_spans(text) == text
     assert time.perf_counter() - start < 1.0
+
+
+def test_fence_inside_list_item_or_blockquote():
+    # LLMs often put fences in numbered lists. Unrecognised, the indented
+    # closer was taken as a new opener and masked everything after it.
+    text = "1. ```bash\n   echo $HOME and $PATH\n   ```\n2. then $x^2$"
+    assert convert_math_spans(text) == "1. ```bash\n   echo $HOME and $PATH\n   ```\n2. then x²"
+    assert convert_math_spans("- ```\n  $a$\n  ```\n$b_1$") == "- ```\n  $a$\n  ```\nb₁"
+    text = "1. ```\n   $$\n   x\n   $$\n   ```\n$$\ny\n$$"
+    assert collapse_math_blocks(text) == "1. ```\n   $$\n   x\n   $$\n   ```\n$$ y $$"

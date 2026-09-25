@@ -297,13 +297,19 @@ _MATH_SPAN = re.compile(
     r"|(?<!\\)\$(?P<tail>(?=[^\s$\d])(?=[^\n$\x01]*?(?:\\[A-Za-z]|[_^]\{))[^\n$\x01]*?[^\s\\$\x01])[ \t]+\$"
 )
 
+# What may precede a fence on its line: any indentation, and list-item or
+# blockquote markers ('1. ```bash', '> ```'). The goal is masking, not
+# rendering, so this is looser than CommonMark's 0-3 spaces.
+_FENCE_OPEN_PREFIX = r"[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>[ \t]?)*"
+_FENCE_CLOSE_PREFIX = r"[ \t]*(?:>[ \t]?)*"
+
 # A fenced code block: opened by 3+ backticks or tildes (a backtick fence's
 # info string can't itself contain a backtick -- '```ls``' on one line is an
 # inline code span, not a fence), closed by a fence of the same character at
 # least as long, or running to the end of the text if unclosed.
 _FENCED_CODE = re.compile(
-    r"^ {0,3}(?P<fence>(?P<bt>`{3,})(?=[^`\n]*$)|~{3,}).*?"
-    r"(?:^ {0,3}(?P=fence)(?(bt)`*|~*)[ \t]*$|\Z)",
+    rf"^{_FENCE_OPEN_PREFIX}(?P<fence>(?P<bt>`{{3,}})(?=[^`\n]*$)|~{{3,}}).*?"
+    rf"(?:^{_FENCE_CLOSE_PREFIX}(?P=fence)(?(bt)`*|~*)[ \t]*$|\Z)",
     flags=re.MULTILINE | re.DOTALL,
 )
 _BACKTICKS = re.compile(r"`+")
@@ -406,7 +412,7 @@ def convert_math_spans(text: str) -> str:
 
 
 _BARE_DOLLARS_LINE = re.compile(r"^(\s*)\$\$\s*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+_FENCE = re.compile(rf"^{_FENCE_OPEN_PREFIX}(`{{3,}}(?=[^`]*$)|~{{3,}})")
 _TEX_COMMENT = re.compile(r"(?<!\\)%")
 
 
@@ -438,7 +444,7 @@ def collapse_math_blocks(text: str) -> str:
     while i < len(lines):
         line = lines[i]
         if fence is not None:
-            if re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$", line):
+            if re.match(rf"^{_FENCE_CLOSE_PREFIX}{re.escape(fence[0])}{{{len(fence)},}}\s*$", line):
                 fence = None
         elif fence_match := _FENCE.match(line):
             fence = fence_match.group(1)
