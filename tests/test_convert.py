@@ -735,3 +735,11 @@ def test_short_currency_pair_is_prose():
     assert latex_to_unicode("5 and") == "$5 and $"
     assert latex_to_unicode("2 x") == "2 x"
     assert latex_to_unicode("x_1 and") == "x₁ and"
+
+
+def test_cases_comma_before_ampersand_not_doubled():
+    assert latex_to_unicode("\\begin{cases} x, & a \\\\ y, & b \\end{cases}") == "{x, a; y, b}"
+
+
+def test_alignedat_column_count_not_in_output():
+    assert latex_to_unicode("\\begin{alignedat}{2} a &= b \\\\ e &= f \\end{alignedat}") == "a = b; e = f"

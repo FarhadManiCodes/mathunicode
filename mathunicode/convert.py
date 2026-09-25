@@ -47,6 +47,9 @@ def _build_parse_db():
             macrospec.std_macro("pmod", False, 1),
             *(macrospec.std_macro(name, False, 2) for name in ("binom", "dbinom", "tbinom")),
         ],
+        # alignedat{n} takes a column count, like alignat{n} (which pylatexenc
+        # knows); without the spec the 'n' is read as content.
+        environments=[macrospec.std_environment("alignedat", "{")],
     )
     return db
 
@@ -201,8 +204,10 @@ def _matrix(opening: str, closing: str):
 
 
 def _cases(node, l2tobj) -> str:
-    """'\\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}' -> '{1, x>0; 0, else}'."""
-    return "{" + _rows_text(node, l2tobj, ", ") + "}"
+    """'\\begin{cases} 1 & x>0 \\\\ 0 & \\text{else} \\end{cases}' -> '{1, x>0; 0, else}'.
+    A comma the source already puts before '&' ('x, & a') isn't doubled."""
+    rows = [[c.rstrip().rstrip(",").rstrip() for c in row] for row in _grid(node, l2tobj)]
+    return "{" + "; ".join(", ".join(c for c in row if c) for row in rows) + "}"
 
 
 def _aligned(node, l2tobj) -> str:
