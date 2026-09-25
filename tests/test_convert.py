@@ -154,7 +154,7 @@ def test_latex_to_unicode_ocr_spacing_artifacts():
 def test_latex_to_unicode_prose_guard_restores_dollar_signs():
     # Called the way convert_math_spans would, with $ already stripped --
     # must come back with $ signs restored, not just left plain.
-    assert latex_to_unicode("50 to train, compared to") == "$50 to train, compared to$"
+    assert latex_to_unicode("50 to train, compared to") == "$50 to train, compared to $"
 
 
 def test_latex_to_unicode_never_raises_on_malformed_input():
@@ -727,3 +727,11 @@ def test_array_has_no_invented_brackets_and_null_delimiters_vanish():
     # in '[ ]' and printed '\right.' as '.'.
     assert latex_to_unicode("\\begin{array}{l} x = 1 \\\\ y = 2 \\\\ \\end{array}") == "x = 1; y = 2"
     assert latex_to_unicode("\\left. x \\right|") == "x |"
+
+
+def test_short_currency_pair_is_prose():
+    # tree-sitter-markdown (render-markdown.nvim) pairs 'costs $5 and $10'
+    # into the "math" '5 and'; the CLI must hand it back with its '$'s.
+    assert latex_to_unicode("5 and") == "$5 and $"
+    assert latex_to_unicode("2 x") == "2 x"
+    assert latex_to_unicode("x_1 and") == "x₁ and"

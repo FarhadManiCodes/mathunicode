@@ -50,7 +50,7 @@ from mathunicode import latex_to_unicode, convert_math_spans, collapse_math_bloc
 latex_to_unicode(r"\det(A) = 0")     # "det(A) = 0"
 latex_to_unicode(r"x_{i}")           # "xᵢ"
 latex_to_unicode(r"u_{phy}")         # "u_phy" -- 'y' has no subscript form, not partial
-latex_to_unicode("costs 5 and more words")  # "$costs 5 and more words$" -- prose: '$'s restored
+latex_to_unicode("5 and")            # "$5 and $" -- currency paired by mistake: '$'s restored
 
 convert_math_spans("costs $50 to train, compared to $100 for the baseline.")
 # unchanged -- not mistaken for math despite the two $ signs

@@ -512,11 +512,13 @@ def _looks_like_prose(content: str) -> bool:
     whichever '$' comes next, regardless of what's between them -- e.g.
     "costs $50 ... $100" gets read as one math span "50 ... $100"->"50 ...".
     Real LaTeX almost always has a macro (backslash) or a sub/superscript
-    marker; multi-word prose with neither is almost certainly a false
-    positive, not an equation."""
+    marker. Without either, the span is prose if it has 3+ words, or if it
+    starts with a number and has any word -- currency: 'costs $5 and $10'
+    pairs up as '5 and' (no real math in the paper library looks like that)."""
     if "\\" in content or "_" in content or "^" in content:
         return False
-    return len(_PROSE_WORD.findall(content)) >= 3
+    words = _PROSE_WORD.findall(content)
+    return len(words) >= 3 or (bool(words) and content.lstrip()[:1].isdigit())
 
 
 def latex_to_unicode(tex: str) -> str:
@@ -525,17 +527,18 @@ def latex_to_unicode(tex: str) -> str:
     parse failure rather than raising, so one malformed expression never
     breaks a larger document/answer being converted.
 
-    Input that looks like prose rather than math (3+ words, no macro or
-    sub/superscript) comes back wrapped in '$...$': it's taken to be two
-    currency amounts a caller -- or tree-sitter-markdown, for the CLI --
-    paired and stripped by mistake ('costs 5 and more words' ->
-    '$costs 5 and more words$')."""
+    Input that looks like prose rather than math (see _looks_like_prose)
+    comes back wrapped in '$...$': it's taken to be two currency amounts a
+    caller -- or tree-sitter-markdown, for the CLI -- paired and stripped by
+    mistake. The closing '$' is then really the next amount's sign, which
+    follows a space in running text, so the space the caller trimmed is put
+    back: 'Costs $5 and $10' pairs as '5 and' -> '$5 and $'."""
     try:
         if _looks_like_prose(tex):
             # Restore the $ signs a caller (or tree-sitter-markdown) already
             # stripped, so the display ends up identical to the untouched
             # original text instead of silently losing the currency marks.
-            return f"${tex}$"
+            return f"${tex.strip()} $"
         return _convert(tex)
     except Exception:
         return tex
