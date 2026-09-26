@@ -7,7 +7,8 @@ import io
 import sys
 
 from mathunicode import __version__
-from mathunicode.convert import collapse_math_blocks, latex_to_unicode
+from mathunicode.convert import latex_to_unicode
+from mathunicode.markdown import collapse_math_blocks
 
 
 def _run(argv, prog: str, description: str, convert, keep_crlf: bool) -> int:

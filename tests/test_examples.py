@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from mathunicode import convert_math_spans
-from mathunicode.convert import _MATH_SPAN
+from mathunicode.markdown import _MATH_SPAN
 
 EXAMPLES = sorted((Path(__file__).parent.parent / "examples").glob("*.md"))
 EXPECT = re.compile(r"(?P<source>.*?)\s*<!-- expect: (?P<expected>.*?) -->\s*$")

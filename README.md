@@ -73,7 +73,8 @@ Both are UTF-8 whatever the locale and take only `--help` / `--version`.
 uv run pytest
 ```
 
-`tests/test_convert.py` has one table per rule above. `examples/*.md` are
-documentation and tests: each line's `<!-- expect: ... -->` comment is its
-expected rendering, checked by `tests/test_examples.py`; open them in nvim
-with render-markdown to see the formulas rendered in place.
+`tests/test_convert.py` (rules 1-5) and `tests/test_markdown.py` (rule 6) have
+one table per rule above. `examples/*.md` are documentation and tests: each
+line's `<!-- expect: ... -->` comment is its expected rendering, checked by
+`tests/test_examples.py`; open them in nvim with render-markdown to see the
+formulas rendered in place.
