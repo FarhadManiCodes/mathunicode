@@ -1,6 +1,6 @@
 [project]
 name = "mathunicode"
-version = "0.4.0"
+version = "0.4.1"
 description = "LaTeX math -> one line of readable Unicode (via latex2mathml), plus finding math in Markdown."
 readme = "README.md"
 requires-python = ">=3.12"

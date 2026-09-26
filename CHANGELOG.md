@@ -6,6 +6,13 @@ All notable changes to this project. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-26
+
+No change in output.
+
+### Added
+- The GPL-3.0 license text (`LICENSE`) and this changelog.
+
 ### Changed
 - The Markdown layer (finding math spans, skipping code, collapsing `$$`
   blocks) is its own module, `mathunicode.markdown`. The public API is
@@ -94,3 +101,11 @@ The remaining special cases became general rules. About 700 formulas in a
 - `latex_to_unicode`, with Unicode sub/superscripts where representable.
 - `convert_math_spans` for `$...$`/`$$...$$` in Markdown, with a prose guard.
 - `collapse_math_blocks` and the `mathunicode-collapse-blocks` CLI.
+
+[Unreleased]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/FarhadManiCodes/mathunicode/releases/tag/v0.1.0
