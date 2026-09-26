@@ -78,3 +78,7 @@ one table per rule above. `examples/*.md` are documentation and tests: each
 line's `<!-- expect: ... -->` comment is its expected rendering, checked by
 `tests/test_examples.py`; open them in nvim with render-markdown to see the
 formulas rendered in place.
+
+## License
+
+GPL-3.0-or-later; see [LICENSE](LICENSE). Changes are in [CHANGELOG.md](CHANGELOG.md).
