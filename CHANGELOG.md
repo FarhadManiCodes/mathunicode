@@ -6,6 +6,8 @@ All notable changes to this project. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-02
+
 No change in output.
 
 ### Added
@@ -116,7 +118,8 @@ The remaining special cases became general rules. About 700 formulas in a
 - `convert_math_spans` for `$...$`/`$$...$$` in Markdown, with a prose guard.
 - `collapse_math_blocks` and the `mathunicode-collapse-blocks` CLI.
 
-[Unreleased]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FarhadManiCodes/mathunicode/compare/v0.2.0...v0.3.0
