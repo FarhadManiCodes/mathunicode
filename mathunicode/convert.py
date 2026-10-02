@@ -224,6 +224,8 @@ def latex_to_unicode(tex: str) -> str:
         if _SYNTAX_PLACEHOLDER.fullmatch(tex):
             return f"${tex}$"
         return f"${tex.strip()} $" if _looks_like_prose(tex) else _convert(tex)
+    except ImportError:  # a broken install is not an unparsable formula
+        raise
     except Exception:
         return " ".join(tex.split())
 

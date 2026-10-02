@@ -4,8 +4,8 @@ The public names load on first use (PEP 562): `import mathunicode` -- and so eve
 nvim pays per formula -- imports no parser and no package metadata."""
 
 from importlib import import_module
-from typing import TYPE_CHECKING
 
+TYPE_CHECKING = False  # not typing's: importing typing costs more than the rest of this file
 if TYPE_CHECKING:
     from mathunicode.convert import latex_to_unicode
     from mathunicode.markdown import collapse_math_blocks, convert_math_spans

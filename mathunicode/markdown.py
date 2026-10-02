@@ -3,8 +3,6 @@ multi-line $$ blocks on one line. Public: convert_math_spans, collapse_math_bloc
 
 import re
 
-from mathunicode.convert import _SYNTAX_PLACEHOLDER, _convert, _looks_like_prose
-
 # $$...$$, or $...$ on one line: a body starting with a digit is tight and not followed by a digit
 # (currency '$5 or $6' never pairs); any other may be padded, as OCR writes it. '\x01' is masked code.
 _MATH_SPAN = re.compile(
@@ -39,6 +37,9 @@ def _unmask(text: str, saved: list[str]) -> str:
 
 def convert_math_spans(text: str) -> str:
     """Convert each $...$/$$...$$ span in place; escaped '\\$', code, prose and unparsable spans stay."""
+    # Not at the top: collapsing blocks (nvim's :MathCollapse) needs none of the renderer.
+    from mathunicode.convert import _SYNTAX_PLACEHOLDER, _convert, _looks_like_prose
+
     saved: list[str] = []
     text, out, pos = _mask_code(text, saved), [], 0
     while m := _MATH_SPAN.search(text, pos):
@@ -51,6 +52,8 @@ def convert_math_spans(text: str) -> str:
             continue
         try:
             converted = _convert(content)
+        except ImportError:  # a broken install is not an unparsable span
+            raise
         except Exception:
             converted = m.group(0)
         out, pos = out + [text[pos : m.start()], converted], m.end()
