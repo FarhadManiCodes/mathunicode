@@ -7,8 +7,6 @@ import unicodedata
 from itertools import groupby
 from xml.etree.ElementTree import Element
 
-from latex2mathml.converter import convert_to_element
-
 # Character data -- sub/superscripts, TeX atom classes, styled letters -- derived from Unicode and
 # unicode-math by _build_tables.py.
 from mathunicode._tables import CLASS as _CLASS
@@ -237,6 +235,9 @@ _TOLERANT = ((r"\\(?:left|right|[bB]igg?[lr]?)(?![A-Za-z])\s*\.?", ""), (r"\}\s*
 
 
 def _convert(tex: str) -> str:
+    # Imported here: it costs ~40 ms, which markdown's span finding and block collapsing never need.
+    from latex2mathml.converter import convert_to_element
+
     try:
         element = convert_to_element(tex)
     except Exception:
