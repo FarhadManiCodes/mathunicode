@@ -65,7 +65,30 @@ collapse_math_blocks("before\n$$\nx_{i}\n$$\nafter")  # "before\n$$ x_{i} $$\naf
   conceals one-line source), keeping indentation and CRLF; blocks in code,
   empty, or with a `%` comment stay.
 
-Both are UTF-8 whatever the locale and take only `--help` / `--version`.
+Both are UTF-8 whatever the locale and take only `--help` / `--version`
+(`mathunicode` also takes `serve`).
+
+### Speed
+
+An editor starts `mathunicode` once per formula and waits for all of them, and
+Python's start and imports cost ~55 ms of the ~58 ms a call took. So
+`mathunicode` first asks a warm server and converts itself if there is none:
+a call is ~16 ms, eight at once ~24 ms (was 102).
+
+- The first call with no server converts itself and starts one
+  (`mathunicode serve`, detached, exits after 30 idle minutes; `--idle` changes
+  that). One per Python environment and version of the code, so an upgrade or an
+  edit never meets a stale one.
+- It listens on a socket in `$XDG_RUNTIME_DIR/mathunicode/` (mode 0600, in a
+  0700 directory), forks per request, and so a formula that hangs costs one
+  child, not the server.
+- Output never depends on it: the server and the fallback run the same function
+  (`mathunicode.server.convert_bytes`), and a missing, slow (0.3 s) or broken
+  server means converting in-process. Set `MATHUNICODE_NO_SERVER=1` to never
+  use or start one; with no `$XDG_RUNTIME_DIR` there is none.
+- `mathunicode-collapse-blocks` and the Python API never use it
+  (`import mathunicode` loads no parser; the parser loads on the first
+  conversion).
 
 ## Tests
 

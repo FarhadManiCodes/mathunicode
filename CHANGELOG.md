@@ -6,6 +6,20 @@ All notable changes to this project. The format follows
 
 ## [Unreleased]
 
+No change in output.
+
+### Added
+- `mathunicode serve`: a warm converter the `mathunicode` command asks first
+  (started on demand, exits when idle, never needed for correctness; see the
+  README). A call takes ~16 ms instead of ~58, eight at once ~24 instead of 102.
+- `MATHUNICODE_NO_SERVER=1` to never use or start it.
+
+### Changed
+- Importing `mathunicode` or the Markdown functions loads no parser and no
+  package metadata (`collapse_math_blocks`, `convert_math_spans`, and the
+  `mathunicode-collapse-blocks` command: ~60 ms -> ~13 ms). The parser loads on
+  the first conversion; a broken install still raises `ImportError` there.
+
 ## [0.4.1] - 2026-09-26
 
 No change in output.
