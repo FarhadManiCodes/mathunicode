@@ -121,7 +121,7 @@ def _start(paths: tuple[str, str, str]) -> None:
 
     try:
         try:  # a server that just died (it wrote its pid here on the way up) is not started again at once
-            if time.time() - os.stat(paths[2]).st_mtime < _RESTART_PAUSE:
+            if 0 <= time.time() - os.stat(paths[2]).st_mtime < _RESTART_PAUSE:
                 return
         except FileNotFoundError:
             pass
@@ -146,14 +146,18 @@ def _answer(conn) -> None:
     conn.sendall(len(out).to_bytes(4) + out)
 
 
-def _same_file(path: str, inode: int) -> bool:
+def _file_id(info: os.stat_result) -> tuple[int, int]:
+    return info.st_dev, info.st_ino  # an inode number alone can be reused
+
+
+def _same_file(path: str, ident: tuple[int, int]) -> bool:
     try:
-        return os.stat(path).st_ino == inode
+        return _file_id(os.stat(path)) == ident
     except OSError:
         return False
 
 
-def _current(path: str, inode: int) -> bool:
+def _current(path: str, ident: tuple[int, int]) -> bool:
     """Can clients still find this server? Its socket is still the file it bound (a cleaned runtime
     dir, or a newer server's socket, would not be), and the sources and interpreter still give its
     name -- an edited or upgraded install has a newer server by now."""
@@ -161,7 +165,7 @@ def _current(path: str, inode: int) -> bool:
         paths = _paths()
     except OSError:
         return False
-    return _same_file(path, inode) and paths is not None and paths[1] == path
+    return _same_file(path, ident) and paths is not None and paths[1] == path
 
 
 def serve(idle: float = _IDLE, lock_fd: int | None = None, wake: float = _WAKE) -> int:
@@ -184,7 +188,7 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None, wake: float = _WAKE) 
         return 1
     if lock_fd is not None:  # the client locked the file it saw; ours may be another (sources changed since)
         try:
-            handed = os.fstat(lock_fd).st_ino == os.stat(lock_path).st_ino
+            handed = _file_id(os.fstat(lock_fd)) == _file_id(os.stat(lock_path))
         except OSError:
             handed = False
         if not handed:
@@ -199,56 +203,66 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None, wake: float = _WAKE) 
     lock.truncate(0)
     lock.write(f"{os.getpid()}\n")
     lock.flush()
-    lock_inode = os.fstat(lock.fileno()).st_ino
+    lock_id = _file_id(os.fstat(lock.fileno()))
 
-    convert_bytes(b"x")  # pay the parser's import now, not on the first request
-    signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # children are reaped as they exit
+    listener = ident = None
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # runs the cleanup below
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        os.unlink(path)  # a crashed server's; we hold the lock, so nobody else's
-    except FileNotFoundError:
-        pass
-    os.umask(0o177)  # the socket is ours alone
-    listener.bind(path)
-    listener.listen(128)
-    inode = os.stat(path).st_ino
-    listener.settimeout(min(wake, idle))
-    last = time.monotonic()
-    try:
+        convert_bytes(b"x")  # pay the parser's import now, not on the first request
+        signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # children are reaped as they exit
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            os.unlink(path)  # a crashed server's; we hold the lock, so nobody else's
+        except FileNotFoundError:
+            pass
+        os.umask(0o177)  # the socket is ours alone
+        listener.bind(path)
+        listener.listen(128)
+        ident = _file_id(os.stat(path))
+        listener.settimeout(min(wake, idle))
+        last = time.monotonic()
+        failures = 0
         while True:
             try:
                 conn, _ = listener.accept()
-            except TimeoutError:
-                if time.monotonic() - last >= idle or not _current(path, inode):
+                failures = 0
+            except ConnectionAbortedError:  # that client gave up; the next one is fine
+                continue
+            except OSError as error:  # a timeout, or out of descriptors say
+                if not isinstance(error, TimeoutError):
+                    failures += 1
+                    if failures >= 50:  # not going to get better
+                        return 0
+                    time.sleep(0.05)
+                if time.monotonic() - last >= idle or not _current(path, ident):
                     return 0
                 continue
-            except OSError:  # out of descriptors, say: shed this one and carry on
-                time.sleep(0.05)
-                continue
             last = time.monotonic()
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})  # none between fork and the child's reset
             try:
                 pid = os.fork()
             except OSError:
-                conn.close()
-                continue
+                pid = -1
             if pid == 0:
                 try:
+                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+                    signal.signal(signal.SIGALRM, signal.SIG_DFL)  # a launcher may have ignored it
                     listener.close()
                     lock.close()  # a child must not keep the lock if the server is gone
-                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-                    signal.signal(signal.SIGALRM, signal.SIG_DFL)  # a launcher may have ignored it
                     signal.alarm(_CHILD_LIMIT)  # SIGALRM's default action ends the child
                     _answer(conn)
                 except BaseException:  # noqa: BLE001 -- no reply is the failure signal
                     pass
                 finally:
                     os._exit(0)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
             conn.close()
     finally:
-        listener.close()
-        for leftover, ino in ((path, inode), (lock_path, lock_inode)):  # ours, not a newer server's
-            if _same_file(leftover, ino):
+        if listener is not None:
+            listener.close()
+        for leftover, known in ((path, ident), (lock_path, lock_id)):  # ours, not a newer server's
+            if known is not None and _same_file(leftover, known):
                 os.unlink(leftover)
 
 

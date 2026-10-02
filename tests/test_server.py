@@ -167,15 +167,16 @@ def test_current_means_the_socket_is_the_one_bound_and_the_name_still_fits(runti
     os.makedirs(os.path.dirname(sock), mode=0o700)
     held = socket.socket(socket.AF_UNIX)
     held.bind(sock)
-    inode = os.stat(sock).st_ino
-    assert server._current(sock, inode)
-    assert not server._current(sock, inode + 1)
+    ident = server._file_id(os.stat(sock))
+    assert server._current(sock, ident)
+    assert not server._current(sock, (ident[0], ident[1] + 1))
+    assert not server._current(sock, (ident[0] + 1, ident[1]))
     monkeypatch.setattr(server, "_paths", lambda: ("d", sock + "x", "l"))  # the sources changed
-    assert not server._current(sock, inode)
+    assert not server._current(sock, ident)
     held.close()
     os.unlink(sock)
     monkeypatch.undo()
-    assert not server._current(sock, inode)
+    assert not server._current(sock, ident)
 
 
 def test_a_lock_handed_over_for_a_file_that_is_gone_is_not_trusted(runtime_dir, monkeypatch):
@@ -305,3 +306,28 @@ def test_the_key_follows_the_interpreter(monkeypatch):
     here = server._paths()
     monkeypatch.setattr(sys, "prefix", "/somewhere/else")
     assert server._paths() != here
+
+
+def test_the_pause_after_a_dead_server_ends(runtime_dir):
+    _, sock, lock = server._paths()
+    os.makedirs(os.path.dirname(sock), mode=0o700)
+    Path(lock).write_text("1\n")
+    old = time.time() - 2 * server._RESTART_PAUSE
+    os.utime(lock, (old, old))
+    env = {k: v for k, v in os.environ.items() if k != "MATHUNICODE_NO_SERVER"}
+    out = subprocess.run([sys.executable, "-P", "-c", "import sys; from mathunicode.cli import main; sys.exit(main())"],
+                         input=b"x_i", capture_output=True, timeout=20, check=False, env=env)
+    assert out.stdout == "xᵢ".encode()
+    assert _wait_for(lambda: _accepts(sock))
+
+
+def test_a_server_can_start_again_at_once_after_a_clean_exit(runtime_dir):
+    _, sock, lock = server._paths()
+    for _ in range(2):
+        proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "30"])
+        try:
+            assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
+        finally:
+            proc.terminate()
+            assert proc.wait(timeout=10) == 0
+        assert not os.path.exists(sock) and not os.path.exists(lock)
