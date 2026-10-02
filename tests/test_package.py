@@ -28,6 +28,7 @@ def _modules_loaded_by(statement: str) -> set[str]:
 
 @pytest.mark.parametrize("statement", [
     "import mathunicode",
+    "import mathunicode.cli",
     "from mathunicode import collapse_math_blocks, convert_math_spans",
     "import mathunicode.markdown",
 ])
