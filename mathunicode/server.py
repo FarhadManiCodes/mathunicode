@@ -19,6 +19,8 @@ import sys
 _DEADLINE = 0.3  # a client waits this long in all for the server (a reply takes ~1 ms) before converting itself
 _CHILD_LIMIT = 5  # seconds a request may take in the server before its child is killed
 _IDLE = 1800.0  # seconds without a request before the server exits
+_WAKE = 30.0  # how often an idle server checks that clients can still find it
+_RESTART_PAUSE = 10.0  # a server that started less than this long ago and is gone is not started again
 
 
 def convert_bytes(raw: bytes) -> bytes:
@@ -44,8 +46,11 @@ def _paths() -> tuple[str, str, str] | None:
     stamp = [sys.prefix, sys.version]
     parser = find_spec("latex2mathml")  # located, not imported
     if parser and parser.origin:
-        info = os.stat(os.path.join(os.path.dirname(parser.origin), "converter.py"))
-        stamp.append(f"latex2mathml:{info.st_mtime_ns}:{info.st_size}")
+        try:
+            info = os.stat(os.path.join(os.path.dirname(parser.origin), "converter.py"))
+            stamp.append(f"latex2mathml:{info.st_mtime_ns}:{info.st_size}")
+        except OSError:  # a zipped or compiled-only install: the version of the rest still keys it
+            pass
     with os.scandir(here) as entries:
         for entry in sorted(entries, key=lambda e: e.name):
             if entry.name.endswith(".py"):
@@ -58,13 +63,26 @@ def _paths() -> tuple[str, str, str] | None:
 
 def request(raw: bytes) -> bytes | None:
     """The server's answer for these stdin bytes, or None: no server (it is started for next time),
-    disabled, slow or broken -- the caller converts itself."""
+    disabled, slow or broken -- the caller converts itself. Never raises: the command's exit status
+    must not depend on a convenience."""
+    try:
+        return _request(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _request(raw: bytes) -> bytes | None:
     paths = None if os.environ.get("MATHUNICODE_NO_SERVER") else _paths()
     if paths is None:
         return None
     import socket
     import time
 
+    try:
+        if os.stat(paths[0]).st_uid != os.getuid():  # a shared runtime dir: not ours to trust
+            return None
+    except OSError:  # no directory yet: connecting fails and starts a server
+        pass
     deadline = time.monotonic() + _DEADLINE
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         try:
@@ -99,9 +117,17 @@ def _start(paths: tuple[str, str, str]) -> None:
     close) would wait for the server too. `-P`: the caller's directory cannot shadow our modules."""
     import fcntl
     import subprocess
+    import time
 
     try:
+        try:  # a server that just died (it wrote its pid here on the way up) is not started again at once
+            if time.time() - os.stat(paths[2]).st_mtime < _RESTART_PAUSE:
+                return
+        except FileNotFoundError:
+            pass
         os.makedirs(paths[0], mode=0o700, exist_ok=True)
+        if os.stat(paths[0]).st_uid != os.getuid():
+            return
         with open(paths[2], "a+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if a server has it or is starting
             subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--lock-fd", str(lock.fileno())],
@@ -120,12 +146,32 @@ def _answer(conn) -> None:
     conn.sendall(len(out).to_bytes(4) + out)
 
 
-def serve(idle: float = _IDLE, lock_fd: int | None = None) -> int:
-    """Serve until `idle` seconds pass without a request. Returns at once if one is already running
-    (or there is no runtime dir to put the socket in). `lock_fd`: a client's, already locked."""
+def _same_file(path: str, inode: int) -> bool:
+    try:
+        return os.stat(path).st_ino == inode
+    except OSError:
+        return False
+
+
+def _current(path: str, inode: int) -> bool:
+    """Can clients still find this server? Its socket is still the file it bound (a cleaned runtime
+    dir, or a newer server's socket, would not be), and the sources and interpreter still give its
+    name -- an edited or upgraded install has a newer server by now."""
+    try:
+        paths = _paths()
+    except OSError:
+        return False
+    return _same_file(path, inode) and paths is not None and paths[1] == path
+
+
+def serve(idle: float = _IDLE, lock_fd: int | None = None, wake: float = _WAKE) -> int:
+    """Serve until `idle` seconds pass without a request, or clients can no longer find this server
+    (checked every `wake` seconds). Returns at once if one is already running (or there is no runtime
+    dir to put the socket in). `lock_fd`: a client's, already locked."""
     import fcntl
     import signal
     import socket
+    import time
 
     paths = _paths()
     if paths is None:
@@ -133,6 +179,17 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None) -> int:
         return 1
     directory, path, lock_path = paths
     os.makedirs(directory, mode=0o700, exist_ok=True)
+    if os.stat(directory).st_uid != os.getuid():
+        print(f"mathunicode serve: {directory} is not yours", file=sys.stderr)
+        return 1
+    if lock_fd is not None:  # the client locked the file it saw; ours may be another (sources changed since)
+        try:
+            handed = os.fstat(lock_fd).st_ino == os.stat(lock_path).st_ino
+        except OSError:
+            handed = False
+        if not handed:
+            os.close(lock_fd)
+            lock_fd = None
     lock = os.fdopen(lock_fd, "a+") if lock_fd is not None else open(lock_path, "a+")  # noqa: SIM115
     if lock_fd is None:  # held for the server's whole life
         try:
@@ -142,6 +199,7 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None) -> int:
     lock.truncate(0)
     lock.write(f"{os.getpid()}\n")
     lock.flush()
+    lock_inode = os.fstat(lock.fileno()).st_ino
 
     convert_bytes(b"x")  # pay the parser's import now, not on the first request
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # children are reaped as they exit
@@ -154,18 +212,32 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None) -> int:
     os.umask(0o177)  # the socket is ours alone
     listener.bind(path)
     listener.listen(128)
-    listener.settimeout(idle)
+    inode = os.stat(path).st_ino
+    listener.settimeout(min(wake, idle))
+    last = time.monotonic()
     try:
         while True:
             try:
                 conn, _ = listener.accept()
             except TimeoutError:
-                return 0
-            if os.fork() == 0:
+                if time.monotonic() - last >= idle or not _current(path, inode):
+                    return 0
+                continue
+            except OSError:  # out of descriptors, say: shed this one and carry on
+                time.sleep(0.05)
+                continue
+            last = time.monotonic()
+            try:
+                pid = os.fork()
+            except OSError:
+                conn.close()
+                continue
+            if pid == 0:
                 try:
                     listener.close()
                     lock.close()  # a child must not keep the lock if the server is gone
                     signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                    signal.signal(signal.SIGALRM, signal.SIG_DFL)  # a launcher may have ignored it
                     signal.alarm(_CHILD_LIMIT)  # SIGALRM's default action ends the child
                     _answer(conn)
                 except BaseException:  # noqa: BLE001 -- no reply is the failure signal
@@ -175,10 +247,9 @@ def serve(idle: float = _IDLE, lock_fd: int | None = None) -> int:
             conn.close()
     finally:
         listener.close()
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        for leftover, ino in ((path, inode), (lock_path, lock_inode)):  # ours, not a newer server's
+            if _same_file(leftover, ino):
+                os.unlink(leftover)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,8 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idle", type=float, default=_IDLE, metavar="SECONDS",
                         help="exit after this long without a request (default: %(default)s)")
     parser.add_argument("--lock-fd", type=int, help=argparse.SUPPRESS)  # a client starting us hands its lock over
+    parser.add_argument("--wake", type=float, default=_WAKE, help=argparse.SUPPRESS)  # for tests
     args = parser.parse_args(argv)
-    return serve(args.idle, args.lock_fd)
+    return serve(args.idle, args.lock_fd, args.wake)
 
 
 if __name__ == "__main__":

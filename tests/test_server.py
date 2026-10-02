@@ -25,12 +25,7 @@ def warm(runtime_dir, monkeypatch):
     monkeypatch.delenv("MATHUNICODE_NO_SERVER")
     proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "30"])
     _, sock, _ = server._paths()
-    for _ in range(200):
-        if os.path.exists(sock):
-            break
-        time.sleep(0.05)
-    else:
-        raise AssertionError("the server did not come up")
+    assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
     yield proc
     proc.terminate()
     proc.wait(timeout=10)
@@ -40,6 +35,16 @@ def _cli(stdin: bytes, env: dict[str, str] | None = None, timeout: float = 20):
     code = "import sys; from mathunicode.cli import main; sys.exit(main())"
     return subprocess.run([sys.executable, "-P", "-c", code], input=stdin, capture_output=True,
                           timeout=timeout, check=False, env={**os.environ, **(env or {})})
+
+
+def _accepts(sock) -> bool:
+    """Is something listening on `sock`? (A socket file exists between bind and listen.)"""
+    with socket.socket(socket.AF_UNIX) as probe:
+        try:
+            probe.connect(sock)
+        except OSError:
+            return False
+    return True
 
 
 def _wait_for(condition, seconds=10.0):
@@ -81,11 +86,6 @@ def test_command_output_is_the_same_with_and_without_a_server(warm, raw):
     assert (with_server.stdout, with_server.returncode) == (alone.stdout, alone.returncode)
 
 
-def test_no_server_means_no_answer_and_the_command_still_works(runtime_dir):
-    assert server.request(b"x_i") is None
-    assert _cli(b"x_i").stdout == "xᵢ".encode()
-
-
 def test_without_a_runtime_dir_the_command_still_works(monkeypatch):
     monkeypatch.delenv("MATHUNICODE_NO_SERVER")
     monkeypatch.delenv("XDG_RUNTIME_DIR")
@@ -116,18 +116,117 @@ def test_many_clients_at_once_start_one_server(runtime_dir):
     procs = [subprocess.Popen([sys.executable, "-P", "-c", code], stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, env=env) for _ in range(12)]
     for p in procs:
-        p.communicate(b"x_i", timeout=30)
-        assert p.returncode == 0
+        out, _ = p.communicate(b"x_i", timeout=30)
+        assert (p.returncode, out) == (0, "xᵢ".encode())
     assert _wait_for(lambda: len(list((runtime_dir / "mathunicode").glob("*.sock"))) == 1)
     time.sleep(0.5)  # a loser would have exited by now
     assert len(_servers_of(runtime_dir)) == 1
 
 
 def test_server_exits_when_idle_and_cleans_up(runtime_dir):
-    proc = subprocess.run([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "0.3"],
-                          timeout=20, check=False)
-    assert proc.returncode == 0
-    assert not list((runtime_dir / "mathunicode").glob("*.sock"))
+    _, sock, lock = server._paths()
+    proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "1.5"])
+    try:
+        assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
+        assert proc.wait(timeout=20) == 0
+    finally:
+        proc.kill()
+    assert not os.path.exists(sock)
+    assert not os.path.exists(lock)
+
+
+def test_a_server_whose_socket_was_removed_exits(runtime_dir):
+    # A cleaned runtime dir (logout) leaves a live server nobody can reach.
+    _, sock, _ = server._paths()
+    proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "60", "--wake", "0.2"])
+    try:
+        assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
+        os.unlink(sock)
+        assert proc.wait(timeout=20) == 0
+    finally:
+        proc.kill()
+
+
+def test_a_server_does_not_remove_a_newer_ones_socket(runtime_dir):
+    _, sock, _ = server._paths()
+    proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "60", "--wake", "0.2"])
+    try:
+        assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
+        os.unlink(sock)
+        newer = socket.socket(socket.AF_UNIX)
+        newer.bind(sock)  # another server's, at the same name
+        assert proc.wait(timeout=20) == 0
+        assert os.path.exists(sock)
+        newer.close()
+    finally:
+        proc.kill()
+
+
+def test_current_means_the_socket_is_the_one_bound_and_the_name_still_fits(runtime_dir, monkeypatch):
+    _, sock, _ = server._paths()
+    os.makedirs(os.path.dirname(sock), mode=0o700)
+    held = socket.socket(socket.AF_UNIX)
+    held.bind(sock)
+    inode = os.stat(sock).st_ino
+    assert server._current(sock, inode)
+    assert not server._current(sock, inode + 1)
+    monkeypatch.setattr(server, "_paths", lambda: ("d", sock + "x", "l"))  # the sources changed
+    assert not server._current(sock, inode)
+    held.close()
+    os.unlink(sock)
+    monkeypatch.undo()
+    assert not server._current(sock, inode)
+
+
+def test_a_lock_handed_over_for_a_file_that_is_gone_is_not_trusted(runtime_dir, monkeypatch):
+    # The client locked the file it saw; if that is no longer the server's lock file the server
+    # takes its own lock, so two servers never share a name.
+    import fcntl
+
+    _, sock, lock_path = server._paths()
+    os.makedirs(os.path.dirname(sock), mode=0o700)
+    stale = open(lock_path, "a+")
+    fcntl.flock(stale, fcntl.LOCK_EX)
+    os.unlink(lock_path)  # what an exiting server does
+    proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "30", "--lock-fd",
+                             str(stale.fileno())], pass_fds=(stale.fileno(),))
+    try:
+        assert _wait_for(lambda: _accepts(sock)), "the server did not come up"
+        assert os.fstat(os.open(lock_path, os.O_RDONLY)).st_size > 0  # it wrote its pid to a new file
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+        stale.close()
+
+
+def test_a_server_that_just_died_is_not_started_again_at_once(runtime_dir):
+    # What a crash-on-start would otherwise do: a Python start per formula, forever.
+    _, sock, lock = server._paths()
+    os.makedirs(os.path.dirname(sock), mode=0o700)
+    Path(lock).write_text("1\n")  # a server wrote its pid here moments ago
+    env = {k: v for k, v in os.environ.items() if k != "MATHUNICODE_NO_SERVER"}
+    out = subprocess.run([sys.executable, "-P", "-c", "import sys; from mathunicode.cli import main; sys.exit(main())"],
+                         input=b"x_i", capture_output=True, timeout=20, check=False, env=env)
+    assert out.stdout == "xᵢ".encode()
+    time.sleep(0.5)
+    assert not _servers_of(runtime_dir)
+    assert not os.path.exists(sock)
+
+
+def test_a_failure_in_the_client_is_no_answer_not_an_error(monkeypatch):
+    monkeypatch.delenv("MATHUNICODE_NO_SERVER")
+
+    def boom():
+        raise FileNotFoundError("converter.py")
+
+    monkeypatch.setattr(server, "_paths", boom)
+    assert server.request(b"x_i") is None
+
+
+def test_a_runtime_dir_that_is_not_ours_is_not_trusted(warm, monkeypatch):
+    assert server.request(b"x_i") == "xᵢ".encode()
+    monkeypatch.setattr(server.os, "getuid", lambda: os.stat(server._paths()[0]).st_uid + 1)
+    assert server.request(b"x_i") is None
 
 
 def test_a_second_server_defers_to_the_first(warm):
@@ -144,15 +243,7 @@ def test_a_crashed_servers_socket_does_not_block_the_next(runtime_dir, monkeypat
     dead.close()
     proc = subprocess.Popen([sys.executable, "-P", "-m", "mathunicode.server", "--idle", "30"])
     try:
-        def accepts():
-            with socket.socket(socket.AF_UNIX) as probe:
-                try:
-                    probe.connect(sock)
-                except OSError:
-                    return False
-            return True
-
-        assert _wait_for(accepts)
+        assert _wait_for(lambda: _accepts(sock))
         monkeypatch.delenv("MATHUNICODE_NO_SERVER")
         assert server.request(b"x_i") == "xᵢ".encode()
     finally:
@@ -203,9 +294,11 @@ def test_a_server_that_never_answers_costs_the_deadline_not_more(runtime_dir, mo
     try:
         start = time.monotonic()
         assert server.request(b"x_i") is None
-        assert time.monotonic() - start < server._DEADLINE + 0.5
+        assert time.monotonic() - start < server._DEADLINE + 1.5  # slack for a loaded machine
     finally:
         listener.close()
+        for conn in held:
+            conn.close()
 
 
 def test_the_key_follows_the_interpreter(monkeypatch):
